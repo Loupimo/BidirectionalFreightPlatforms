@@ -51,13 +51,16 @@ namespace
 		bool bSecondPassStarted = false;
 		/** The platform's player-configured load mode, restored when the dock ends. */
 		bool bOriginalLoadMode = false;
+
+		/** Diagnostics: logged once when the input-redirect hook first fires. */
+		bool bLoggedCollectFired = false;
 	};
 
 	TMap<TWeakObjectPtr<AFGBuildableTrainPlatformCargo>, FBFPPlatform> GPlatforms;
 
 	bool IsStandardPlatform( AFGBuildableTrainPlatformCargo* Platform )
 	{
-		return Platform && Platform->mFreightCargoType == EFreightCargoType::FCT_Standard;
+		return Platform && Platform->GetmFreightCargoType() == EFreightCargoType::FCT_Standard;
 	}
 
 	/** Bidirectional opt-in: a standard platform wired with BOTH an input and an output belt. Single-
@@ -96,8 +99,7 @@ namespace
 
 		if ( !P.UnloadInventory.IsValid() )
 		{
-			UFGInventoryComponent* CurrentInv = Platform->mInventory;
-			P.UnloadInventory = CurrentInv;
+			P.UnloadInventory = Platform->GetInventory();
 		}
 
 		if ( !P.LoadInventory.IsValid() )
@@ -106,7 +108,7 @@ namespace
 			if ( Inv )
 			{
 				Inv->RegisterComponent();
-				const int32 Size = FMath::Max( 1, static_cast<int32>( Platform->mStorageSizeX ) * static_cast<int32>( Platform->mStorageSizeY ) );
+				const int32 Size = FMath::Max( 1, static_cast<int32>( Platform->GetmStorageSizeX() ) * static_cast<int32>( Platform->GetmStorageSizeY() ) );
 				Inv->Resize( Size );
 				P.LoadInventory = Inv;
 				UE_LOG( LogBFP, Display, TEXT( "Created load buffer (%d slots) for %s" ), Size, *Platform->GetName() );
@@ -194,6 +196,8 @@ void FBFPHooks::RegisterHooks()
 	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_CollectInput_Implementation,
 		[]( auto& scope, AFGBuildableTrainPlatformCargo* self )
 		{
+			(void)scope; // not used: we don't cancel; vanilla auto-forwards after this handler
+
 			if ( !IsBidirectional( self ) )
 			{
 				return; // auto-forwards to vanilla
@@ -201,8 +205,14 @@ void FBFPHooks::RegisterHooks()
 			if ( UFGInventoryComponent* Load = GetOrCreateLoadInventory( self ) )
 			{
 				FBFPPlatform& P = GPlatforms.FindOrAdd( self );
-				P.CollectSaved = self->mInventory;
-				self->mInventory = Load;
+				if ( !P.bLoggedCollectFired )
+				{
+					P.bLoggedCollectFired = true;
+					UE_LOG( LogBFP, Warning, TEXT( "CollectInput hook ACTIVE on %s: redirecting inputs to load buffer (%p), unloadInv=%p" ),
+						*self->GetName(), static_cast<const void*>( Load ), static_cast<const void*>( self->GetInventory() ) );
+				}
+				P.CollectSaved = self->GetInventory();
+				self->SetmInventory( Load );
 			}
 			// auto-forwards to vanilla, which now collects into the load buffer
 		} );
@@ -214,7 +224,7 @@ void FBFPHooks::RegisterHooks()
 			{
 				if ( P->CollectSaved.IsValid() )
 				{
-					self->mInventory = P->CollectSaved.Get();
+					self->SetmInventory( P->CollectSaved.Get() );
 					P->CollectSaved = nullptr;
 				}
 			}
@@ -236,14 +246,14 @@ void FBFPHooks::RegisterHooks()
 			FBFPPlatform& P = GPlatforms.FindOrAdd( self );
 			P.bDockActive = true;
 			P.bSecondPassStarted = false;
-			P.bOriginalLoadMode = ( self->mIsInLoadMode != 0 );
+			P.bOriginalLoadMode = self->GetIsInLoadMode();
 
 			// Pass 1 = UNLOAD on the unload buffer.
 			if ( P.UnloadInventory.IsValid() )
 			{
-				self->mInventory = P.UnloadInventory.Get();
+				self->SetmInventory( P.UnloadInventory.Get() );
 			}
-			self->mIsInLoadMode = 0;
+			self->SetmIsInLoadMode( false );
 
 			UE_LOG( LogBFP, Display, TEXT( "Bidirectional dock on %s: forcing UNLOAD-first" ), *self->GetName() );
 		} );
@@ -266,24 +276,24 @@ void FBFPHooks::RegisterHooks()
 			if ( Status == ETrainPlatformDockingStatus::ETPDS_Complete && !P->bSecondPassStarted )
 			{
 				P->bSecondPassStarted = true;
-				self->mIsInLoadMode = 1;
+				self->SetmIsInLoadMode( true );
 				if ( P->LoadInventory.IsValid() )
 				{
-					self->mInventory = P->LoadInventory.Get();
+					self->SetmInventory( P->LoadInventory.Get() );
 				}
-				self->mPlatformDockingStatus = ETrainPlatformDockingStatus::ETPDS_WaitingToStart;
+				self->SetmPlatformDockingStatus( ETrainPlatformDockingStatus::ETPDS_WaitingToStart );
 
 				UE_LOG( LogBFP, Warning, TEXT( ">>> LOAD PASS on %s: mInventory -> load buffer (%p)" ),
-					*self->GetName(), static_cast<const void*>( self->mInventory ) );
+					*self->GetName(), static_cast<const void*>( self->GetInventory() ) );
 			}
 			// Dock finished -> restore the platform to its default (unload buffer + configured mode).
 			else if ( Status == ETrainPlatformDockingStatus::ETPDS_None )
 			{
 				if ( P->UnloadInventory.IsValid() )
 				{
-					self->mInventory = P->UnloadInventory.Get();
+					self->SetmInventory( P->UnloadInventory.Get() );
 				}
-				self->mIsInLoadMode = P->bOriginalLoadMode ? 1 : 0;
+				self->SetmIsInLoadMode( P->bOriginalLoadMode );
 				P->bDockActive = false;
 				P->bSecondPassStarted = false;
 			}
@@ -301,9 +311,9 @@ void FBFPHooks::RegisterHooks()
 				{
 					if ( P->UnloadInventory.IsValid() )
 					{
-						self->mInventory = P->UnloadInventory.Get();
+						self->SetmInventory( P->UnloadInventory.Get() );
 					}
-					self->mIsInLoadMode = P->bOriginalLoadMode ? 1 : 0;
+					self->SetmIsInLoadMode( P->bOriginalLoadMode );
 					P->bDockActive = false;
 					P->bSecondPassStarted = false;
 				}
