@@ -32,23 +32,31 @@ namespace
 	}
 
 	/**
-	 * Per-platform state for the bidirectional behaviour. Lives in a transient map keyed by the
-	 * platform (the load inventory is a registered component of the actor, so the actor keeps it
-	 * alive; we only hold weak handles here). Persistence/replication is a later increment.
+	 * Per-platform state.
+	 *
+	 * Design invariant: the platform's vanilla mInventory ALWAYS rests on the UNLOAD buffer. We only
+	 * point it at the LOAD buffer transiently, bracketed inside individual function calls (input
+	 * collect, the load-pass dock-sequence evaluation, and the load-pass Factory_Tick that performs
+	 * the transfer). It is never left on the load buffer across ticks, so a SaveGame (which happens
+	 * between frames) always records mInventory = unload buffer. This is what keeps the two buffers
+	 * from collapsing into one across save/reload.
 	 */
 	struct FBFPPlatform
 	{
-		/** The platform's original/vanilla inventory: the UNLOAD buffer (wagon -> here -> output belts). */
+		/** Vanilla inventory (component "inventory"): UNLOAD buffer (wagon -> here -> output belts). */
 		TWeakObjectPtr<UFGInventoryComponent> UnloadInventory;
-		/** Our added inventory: the LOAD buffer (input belts -> here -> wagon). */
+		/** Our added inventory (component "BFP_LoadInventory"): LOAD buffer (input belts -> here -> wagon). */
 		TWeakObjectPtr<UFGInventoryComponent> LoadInventory;
-		/** Saved mInventory pointer across a Factory_CollectInput swap (set in _BEFORE, restored in _AFTER). */
-		TWeakObjectPtr<UFGInventoryComponent> CollectSaved;
 
-		/** A dock is currently in progress and we are orchestrating its two passes. */
+		/** Saved mInventory across the various transient swaps (one per bracket site, never nested). */
+		TWeakObjectPtr<UFGInventoryComponent> CollectSaved;
+		TWeakObjectPtr<UFGInventoryComponent> TickSaved;
+		TWeakObjectPtr<UFGInventoryComponent> SeqSaved;
+
+		/** A dock is in progress and we are orchestrating its two passes. */
 		bool bDockActive = false;
-		/** The load (second) pass has been kicked off for the current dock. */
-		bool bSecondPassStarted = false;
+		/** The load (second) pass is running (mInventory should be the load buffer during bracketed calls). */
+		bool bLoadPass = false;
 		/** The platform's player-configured load mode, restored when the dock ends. */
 		bool bOriginalLoadMode = false;
 
@@ -63,8 +71,7 @@ namespace
 		return Platform && Platform->GetmFreightCargoType() == EFreightCargoType::FCT_Standard;
 	}
 
-	/** Bidirectional opt-in: a standard platform wired with BOTH an input and an output belt. Single-
-	 *  direction stations (one side wired) are left fully vanilla. Replaced by a real toggle later. */
+	/** Bidirectional opt-in: a standard platform wired with BOTH an input and an output belt. */
 	bool IsBidirectional( AFGBuildableTrainPlatformCargo* Platform )
 	{
 		if ( !IsStandardPlatform( Platform ) )
@@ -80,45 +87,60 @@ namespace
 			{
 				continue;
 			}
-			if ( Conn->GetDirection() == EFactoryConnectionDirection::FCD_INPUT )
-			{
-				bHasInput = true;
-			}
-			else if ( Conn->GetDirection() == EFactoryConnectionDirection::FCD_OUTPUT )
-			{
-				bHasOutput = true;
-			}
+			if ( Conn->GetDirection() == EFactoryConnectionDirection::FCD_INPUT )       { bHasInput = true; }
+			else if ( Conn->GetDirection() == EFactoryConnectionDirection::FCD_OUTPUT ) { bHasOutput = true; }
 		}
 		return bHasInput && bHasOutput;
 	}
 
-	/** Lazily create the LOAD buffer inventory for a platform and remember the UNLOAD (vanilla) one. */
-	UFGInventoryComponent* GetOrCreateLoadInventory( AFGBuildableTrainPlatformCargo* Platform )
+	/** Find an inventory component on the actor by its exact name (robust against mInventory pollution). */
+	UFGInventoryComponent* FindInventoryByName( AActor* Actor, const TCHAR* Name )
+	{
+		TInlineComponentArray<UFGInventoryComponent*> Comps;
+		Actor->GetComponents( Comps );
+		for ( UFGInventoryComponent* C : Comps )
+		{
+			if ( C && C->GetName() == Name )
+			{
+				return C;
+			}
+		}
+		return nullptr;
+	}
+
+	/** Resolve (and cache) the unload + load buffers for a platform, creating the load buffer if needed. */
+	FBFPPlatform& SetupPlatform( AFGBuildableTrainPlatformCargo* Platform )
 	{
 		FBFPPlatform& P = GPlatforms.FindOrAdd( Platform );
 
 		if ( !P.UnloadInventory.IsValid() )
 		{
-			P.UnloadInventory = Platform->GetInventory();
+			UFGInventoryComponent* V = FindInventoryByName( Platform, TEXT( "inventory" ) );
+			P.UnloadInventory = V ? V : Platform->GetInventory();
 		}
 
 		if ( !P.LoadInventory.IsValid() )
 		{
-			UFGInventoryComponent* Inv = NewObject<UFGInventoryComponent>( Platform, TEXT( "BFP_LoadInventory" ) );
-			if ( Inv )
+			// Reuse the saved-and-restored component on reload; only create one the first time.
+			UFGInventoryComponent* L = FindInventoryByName( Platform, TEXT( "BFP_LoadInventory" ) );
+			if ( !L )
 			{
-				Inv->RegisterComponent();
-				const int32 Size = FMath::Max( 1, static_cast<int32>( Platform->GetmStorageSizeX() ) * static_cast<int32>( Platform->GetmStorageSizeY() ) );
-				Inv->Resize( Size );
-				P.LoadInventory = Inv;
-				UE_LOG( LogBFP, Display, TEXT( "Created load buffer (%d slots) for %s" ), Size, *Platform->GetName() );
+				L = NewObject<UFGInventoryComponent>( Platform, TEXT( "BFP_LoadInventory" ) );
+				if ( L )
+				{
+					L->RegisterComponent();
+					const int32 Size = FMath::Max( 1, static_cast<int32>( Platform->GetmStorageSizeX() ) * static_cast<int32>( Platform->GetmStorageSizeY() ) );
+					L->Resize( Size );
+					UE_LOG( LogBFP, Display, TEXT( "Created load buffer (%d slots) for %s" ), Size, *Platform->GetName() );
+				}
 			}
+			P.LoadInventory = L;
 		}
 
-		return P.LoadInventory.Get();
+		return P;
 	}
 
-	/** One-line dump of the platform's docking-relevant state, with both buffer counts. */
+	/** One-line dump of the platform's docking-relevant state, with both buffer counts and bindings. */
 	void LogPlatformState( const TCHAR* Event, AFGBuildableTrainPlatformCargo* Platform )
 	{
 		if ( !Platform )
@@ -126,12 +148,10 @@ namespace
 			return;
 		}
 
-		UFGInventoryComponent* PlatformInv = Platform->GetInventory();
-		const int32 PlatformItems = PlatformInv ? PlatformInv->GetNumItems( nullptr ) : -1;
-
+		FBFPPlatform* P = GPlatforms.Find( Platform );
 		int32 UnloadItems = -1;
 		int32 LoadItems = -1;
-		if ( FBFPPlatform* P = GPlatforms.Find( Platform ) )
+		if ( P )
 		{
 			if ( P->UnloadInventory.IsValid() ) { UnloadItems = P->UnloadInventory->GetNumItems( nullptr ); }
 			if ( P->LoadInventory.IsValid() )   { LoadItems = P->LoadInventory->GetNumItems( nullptr ); }
@@ -148,75 +168,60 @@ namespace
 
 		UE_LOG( LogBFP, Display,
 			TEXT( "[%s] %s | status=%s loadMode=%d activeInv=%p unloadBuf=%d loadBuf=%d wagon=%d docked=%s" ),
-			Event,
-			*Platform->GetName(),
-			DockingStatusToString( Platform->GetDockingStatus() ),
-			Platform->GetIsInLoadMode() ? 1 : 0,
-			static_cast<const void*>( PlatformInv ),
-			UnloadItems,
-			LoadItems,
-			WagonItems,
-			*GetNameSafe( Platform->GetDockedActor() ) );
+			Event, *Platform->GetName(), DockingStatusToString( Platform->GetDockingStatus() ),
+			Platform->GetIsInLoadMode() ? 1 : 0, static_cast<const void*>( Platform->GetInventory() ),
+			UnloadItems, LoadItems, WagonItems, *GetNameSafe( Platform->GetDockedActor() ) );
 	}
 }
 
 void FBFPHooks::RegisterHooks()
 {
-	UE_LOG( LogBFP, Display, TEXT( "BidirectionalFreightPlatforms: registering hooks (Increment 2: two inventories)" ) );
+	UE_LOG( LogBFP, Display, TEXT( "BidirectionalFreightPlatforms: registering hooks (transient-swap, save-safe)" ) );
 
-	// Dump the belt-connection layout when a platform spawns (kept for diagnostics).
+	// On spawn: resolve the two buffers and make sure mInventory rests on the unload buffer (this also
+	// cleans up any save that was written by an older build while mInventory pointed at the load buffer).
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, BeginPlay,
 		[]( AFGBuildableTrainPlatformCargo* self )
 		{
-			if ( !self )
+			if ( !self || !IsStandardPlatform( self ) )
 			{
 				return;
 			}
 
-			const TArray<UFGFactoryConnectionComponent*> Connections = self->GetConnectionComponents();
-			UE_LOG( LogBFP, Display, TEXT( "BeginPlay %s | inv=%p | bidirectional=%d | %d connection(s):" ),
-				*self->GetName(), static_cast<const void*>( self->GetInventory() ),
-				IsBidirectional( self ) ? 1 : 0, Connections.Num() );
-
-			for ( UFGFactoryConnectionComponent* Conn : Connections )
+			FBFPPlatform& P = SetupPlatform( self );
+			if ( P.UnloadInventory.IsValid() && self->GetInventory() != P.UnloadInventory.Get() )
 			{
-				if ( !Conn )
-				{
-					continue;
-				}
-				UE_LOG( LogBFP, Display, TEXT( "    - %s dir=%d boundInv=%p connected=%d" ),
-					*Conn->GetName(), static_cast<int32>( Conn->GetDirection() ),
-					static_cast<const void*>( Conn->GetInventory() ), Conn->IsConnected() ? 1 : 0 );
+				UE_LOG( LogBFP, Warning, TEXT( "BeginPlay %s: mInventory was %p, restoring to unload buffer %p" ),
+					*self->GetName(), static_cast<const void*>( self->GetInventory() ), static_cast<const void*>( P.UnloadInventory.Get() ) );
+				self->SetmInventory( P.UnloadInventory.Get() );
 			}
+
+			UE_LOG( LogBFP, Display, TEXT( "BeginPlay %s | unloadBuf=%p loadBuf=%p bidirectional=%d" ),
+				*self->GetName(), static_cast<const void*>( P.UnloadInventory.Get() ),
+				static_cast<const void*>( P.LoadInventory.Get() ), IsBidirectional( self ) ? 1 : 0 );
 		} );
 
-	// Input redirection: while the platform collects from its input belts, temporarily point mInventory
-	// at the LOAD buffer so the vanilla collection fills it instead of the unload buffer. Restored right
-	// after. Output grabbing is untouched (output connections stay bound to the unload-buffer object).
+	// Input redirection: point mInventory at the load buffer for the duration of the collect, restore after.
 	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_CollectInput_Implementation,
-		[]( auto& scope, AFGBuildableTrainPlatformCargo* self )
+		[]( auto&, AFGBuildableTrainPlatformCargo* self )
 		{
-			(void)scope; // not used: we don't cancel; vanilla auto-forwards after this handler
-
 			if ( !IsBidirectional( self ) )
 			{
-				return; // auto-forwards to vanilla
+				return;
 			}
-			if ( UFGInventoryComponent* Load = GetOrCreateLoadInventory( self ) )
+			FBFPPlatform& P = SetupPlatform( self );
+			if ( P.LoadInventory.IsValid() )
 			{
-				FBFPPlatform& P = GPlatforms.FindOrAdd( self );
 				if ( !P.bLoggedCollectFired )
 				{
 					P.bLoggedCollectFired = true;
-					UE_LOG( LogBFP, Warning, TEXT( "CollectInput hook ACTIVE on %s: redirecting inputs to load buffer (%p), unloadInv=%p" ),
-						*self->GetName(), static_cast<const void*>( Load ), static_cast<const void*>( self->GetInventory() ) );
+					UE_LOG( LogBFP, Warning, TEXT( "CollectInput hook ACTIVE on %s: inputs -> load buffer %p" ),
+						*self->GetName(), static_cast<const void*>( P.LoadInventory.Get() ) );
 				}
 				P.CollectSaved = self->GetInventory();
-				self->SetmInventory( Load );
+				self->SetmInventory( P.LoadInventory.Get() );
 			}
-			// auto-forwards to vanilla, which now collects into the load buffer
 		} );
-
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, Factory_CollectInput_Implementation,
 		[]( AFGBuildableTrainPlatformCargo* self )
 		{
@@ -230,92 +235,119 @@ void FBFPHooks::RegisterHooks()
 			}
 		} );
 
-	// A dock begins: for bidirectional platforms force the first pass to be UNLOAD (on the unload buffer)
-	// regardless of the platform's configured mode, and set up our per-dock state.
+	// During the LOAD pass only, point mInventory at the load buffer for the Factory_Tick (which performs
+	// the actual load transfer) and restore right after, so output/saves between ticks still see the unload buffer.
+	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_Tick,
+		[]( auto&, AFGBuildableTrainPlatformCargo* self, float )
+		{
+			FBFPPlatform* P = GPlatforms.Find( self );
+			if ( P && P->bLoadPass && P->LoadInventory.IsValid() )
+			{
+				P->TickSaved = self->GetInventory();
+				self->SetmInventory( P->LoadInventory.Get() );
+			}
+		} );
+	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, Factory_Tick,
+		[]( AFGBuildableTrainPlatformCargo* self, float )
+		{
+			if ( FBFPPlatform* P = GPlatforms.Find( self ) )
+			{
+				if ( P->TickSaved.IsValid() )
+				{
+					self->SetmInventory( P->TickSaved.Get() );
+					P->TickSaved = nullptr;
+				}
+			}
+		} );
+
+	// A dock begins: force the first pass to be UNLOAD (mInventory already rests on the unload buffer).
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, NotifyTrainDocked,
-		[]( AFGBuildableTrainPlatformCargo* self, AFGRailroadVehicle* vehicle, AFGBuildableRailroadStation* station )
+		[]( AFGBuildableTrainPlatformCargo* self, AFGRailroadVehicle*, AFGBuildableRailroadStation* )
 		{
 			LogPlatformState( TEXT( "NotifyTrainDocked" ), self );
-
 			if ( !IsBidirectional( self ) )
 			{
 				return;
 			}
 
-			GetOrCreateLoadInventory( self );
-			FBFPPlatform& P = GPlatforms.FindOrAdd( self );
+			FBFPPlatform& P = SetupPlatform( self );
 			P.bDockActive = true;
-			P.bSecondPassStarted = false;
+			P.bLoadPass = false;
 			P.bOriginalLoadMode = self->GetIsInLoadMode();
-
-			// Pass 1 = UNLOAD on the unload buffer.
-			if ( P.UnloadInventory.IsValid() )
-			{
-				self->SetmInventory( P.UnloadInventory.Get() );
-			}
 			self->SetmIsInLoadMode( false );
 
 			UE_LOG( LogBFP, Display, TEXT( "Bidirectional dock on %s: forcing UNLOAD-first" ), *self->GetName() );
 		} );
 
-	// Two-pass driver: when a pass completes, run the opposite direction on the opposite buffer.
+	// Bracket the dock-sequence evaluation during the load pass so its "can we load?" checks read the load buffer.
+	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, UpdateDockingSequence,
+		[]( auto&, AFGBuildableTrainPlatformCargo* self )
+		{
+			FBFPPlatform* P = GPlatforms.Find( self );
+			if ( P && P->bLoadPass && P->LoadInventory.IsValid() )
+			{
+				P->SeqSaved = self->GetInventory();
+				self->SetmInventory( P->LoadInventory.Get() );
+			}
+		} );
+
+	// Two-pass driver (runs after vanilla): when the unload pass completes, rewind to run a load pass.
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, UpdateDockingSequence,
 		[]( AFGBuildableTrainPlatformCargo* self )
 		{
 			LogPlatformState( TEXT( "UpdateDockingSequence" ), self );
 
 			FBFPPlatform* P = GPlatforms.Find( self );
-			if ( !P || !P->bDockActive )
+			if ( !P )
 			{
 				return;
 			}
 
 			const ETrainPlatformDockingStatus Status = self->GetDockingStatus();
 
-			// Unload pass finished -> start the LOAD pass on the load buffer.
-			if ( Status == ETrainPlatformDockingStatus::ETPDS_Complete && !P->bSecondPassStarted )
+			if ( P->bDockActive )
 			{
-				P->bSecondPassStarted = true;
-				self->SetmIsInLoadMode( true );
-				if ( P->LoadInventory.IsValid() )
+				// Unload pass finished -> start the LOAD pass (no persistent inventory swap; the brackets do it).
+				if ( Status == ETrainPlatformDockingStatus::ETPDS_Complete && !P->bLoadPass )
 				{
-					self->SetmInventory( P->LoadInventory.Get() );
+					P->bLoadPass = true;
+					self->SetmIsInLoadMode( true );
+					self->SetmPlatformDockingStatus( ETrainPlatformDockingStatus::ETPDS_WaitingToStart );
+					UE_LOG( LogBFP, Warning, TEXT( ">>> LOAD PASS on %s" ), *self->GetName() );
 				}
-				self->SetmPlatformDockingStatus( ETrainPlatformDockingStatus::ETPDS_WaitingToStart );
-
-				UE_LOG( LogBFP, Warning, TEXT( ">>> LOAD PASS on %s: mInventory -> load buffer (%p)" ),
-					*self->GetName(), static_cast<const void*>( self->GetInventory() ) );
+				// Dock finished -> restore the configured mode and clear per-dock state.
+				else if ( Status == ETrainPlatformDockingStatus::ETPDS_None )
+				{
+					self->SetmIsInLoadMode( P->bOriginalLoadMode );
+					P->bDockActive = false;
+					P->bLoadPass = false;
+				}
 			}
-			// Dock finished -> restore the platform to its default (unload buffer + configured mode).
-			else if ( Status == ETrainPlatformDockingStatus::ETPDS_None )
+
+			// Undo the load-pass evaluation bracket so mInventory rests on the unload buffer.
+			if ( P->SeqSaved.IsValid() )
 			{
-				if ( P->UnloadInventory.IsValid() )
-				{
-					self->SetmInventory( P->UnloadInventory.Get() );
-				}
-				self->SetmIsInLoadMode( P->bOriginalLoadMode );
-				P->bDockActive = false;
-				P->bSecondPassStarted = false;
+				self->SetmInventory( P->SeqSaved.Get() );
+				P->SeqSaved = nullptr;
 			}
 		} );
 
-	// Dock aborted mid-sequence: restore defaults.
+	// Dock aborted mid-sequence: restore configured mode and clear state.
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, CancelDockingSequence,
 		[]( AFGBuildableTrainPlatformCargo* self )
 		{
 			LogPlatformState( TEXT( "CancelDockingSequence" ), self );
-
 			if ( FBFPPlatform* P = GPlatforms.Find( self ) )
 			{
 				if ( P->bDockActive )
 				{
-					if ( P->UnloadInventory.IsValid() )
-					{
-						self->SetmInventory( P->UnloadInventory.Get() );
-					}
 					self->SetmIsInLoadMode( P->bOriginalLoadMode );
 					P->bDockActive = false;
-					P->bSecondPassStarted = false;
+					P->bLoadPass = false;
+				}
+				if ( P->UnloadInventory.IsValid() )
+				{
+					self->SetmInventory( P->UnloadInventory.Get() );
 				}
 			}
 		} );
