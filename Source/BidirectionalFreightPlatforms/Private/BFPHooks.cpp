@@ -129,9 +129,19 @@ namespace
 				if ( L )
 				{
 					L->RegisterComponent();
-					const int32 Size = FMath::Max( 1, static_cast<int32>( Platform->GetmStorageSizeX() ) * static_cast<int32>( Platform->GetmStorageSizeY() ) );
-					L->Resize( Size );
-					UE_LOG( LogBFP, Display, TEXT( "Created load buffer (%d slots) for %s" ), Size, *Platform->GetName() );
+					// Clone the vanilla inventory's capacity / slot sizes / filters so the load buffer holds
+					// exactly what a normal freight platform buffer does. Created lazily (first input/dock),
+					// by when the vanilla inventory is fully sized; it is empty there so no contents copy over.
+					if ( UFGInventoryComponent* V = P.UnloadInventory.Get() )
+					{
+						L->CopyFromOtherComponent( V );
+					}
+					else
+					{
+						L->Resize( FMath::Max( 1, static_cast<int32>( Platform->GetmStorageSizeX() ) * static_cast<int32>( Platform->GetmStorageSizeY() ) ) );
+					}
+					UE_LOG( LogBFP, Display, TEXT( "Created load buffer for %s (cloned from unload buffer, size=%d)" ),
+						*Platform->GetName(), L->GetSizeLinear() );
 				}
 			}
 			P.LoadInventory = L;
@@ -188,17 +198,26 @@ void FBFPHooks::RegisterHooks()
 				return;
 			}
 
-			FBFPPlatform& P = SetupPlatform( self );
-			if ( P.UnloadInventory.IsValid() && self->GetInventory() != P.UnloadInventory.Get() )
+			// Capture the vanilla inventory as the UNLOAD buffer (by name, robust against mInventory
+			// pollution) and make mInventory rest on it. The LOAD buffer is created lazily later, once
+			// the vanilla inventory is fully sized (so we can clone its capacity).
+			UFGInventoryComponent* V = FindInventoryByName( self, TEXT( "inventory" ) );
+			if ( !V )
+			{
+				V = self->GetInventory();
+			}
+			FBFPPlatform& P = GPlatforms.FindOrAdd( self );
+			P.UnloadInventory = V;
+
+			if ( V && self->GetInventory() != V )
 			{
 				UE_LOG( LogBFP, Warning, TEXT( "BeginPlay %s: mInventory was %p, restoring to unload buffer %p" ),
-					*self->GetName(), static_cast<const void*>( self->GetInventory() ), static_cast<const void*>( P.UnloadInventory.Get() ) );
-				self->SetmInventory( P.UnloadInventory.Get() );
+					*self->GetName(), static_cast<const void*>( self->GetInventory() ), static_cast<const void*>( V ) );
+				self->SetmInventory( V );
 			}
 
-			UE_LOG( LogBFP, Display, TEXT( "BeginPlay %s | unloadBuf=%p loadBuf=%p bidirectional=%d" ),
-				*self->GetName(), static_cast<const void*>( P.UnloadInventory.Get() ),
-				static_cast<const void*>( P.LoadInventory.Get() ), IsBidirectional( self ) ? 1 : 0 );
+			UE_LOG( LogBFP, Display, TEXT( "BeginPlay %s | unloadBuf=%p bidirectional=%d" ),
+				*self->GetName(), static_cast<const void*>( V ), IsBidirectional( self ) ? 1 : 0 );
 		} );
 
 	// Input redirection: point mInventory at the load buffer for the duration of the collect, restore after.
