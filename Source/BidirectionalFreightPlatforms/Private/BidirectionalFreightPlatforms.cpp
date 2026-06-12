@@ -13,7 +13,10 @@ void FBidirectionalFreightPlatformsModule::StartupModule()
 	// Install the freight-platform hooks. Registered in BOTH editor (PIE) and packaged game so the
 	// Phase 0 instrumentation logs wherever you test. SML's InstallHook is idempotent. Once the real
 	// feature ships you can wrap this in `if (!WITH_EDITOR)` to keep editor tooling untouched.
-	FBFPHooks::RegisterHooks();
+	if (!WITH_EDITOR)
+	{
+		FBFPHooks::RegisterHooks();
+	}
 }
 
 void FBidirectionalFreightPlatformsModule::ShutdownModule()

@@ -9,6 +9,9 @@
 #include "FGFactoryConnectionComponent.h"
 #include "FGInventoryComponent.h"
 
+#include "BFPCargoPlatformComponent.h"
+#include "BFPBlueprintLibrary.h"
+
 #include "Patching/NativeHookManager.h"
 
 DEFINE_LOG_CATEGORY( LogBFP );
@@ -60,18 +63,44 @@ namespace
 		/** The platform's player-configured load mode, restored when the dock ends. */
 		bool bOriginalLoadMode = false;
 
+		/** Cached per-platform toggle component (saved + replicated bidirectional flag). */
+		TWeakObjectPtr<UBFPCargoPlatformComponent> ToggleComp;
+
 		/** Diagnostics: logged once when the input-redirect hook first fires. */
 		bool bLoggedCollectFired = false;
 	};
 
 	TMap<TWeakObjectPtr<AFGBuildableTrainPlatformCargo>, FBFPPlatform> GPlatforms;
 
+	/** Platforms that went through PostLoadGame this session (i.e. loaded from a save, not freshly built). */
+	TSet<TWeakObjectPtr<AFGBuildableTrainPlatform>> GLoadedPlatforms;
+
 	bool IsStandardPlatform( AFGBuildableTrainPlatformCargo* Platform )
 	{
 		return Platform && Platform->GetmFreightCargoType() == EFreightCargoType::FCT_Standard;
 	}
 
-	/** Bidirectional opt-in: a standard platform wired with BOTH an input and an output belt. */
+	/** Find-or-create (and cache) the saved toggle component. Does NOT resolve the default yet. */
+	UBFPCargoPlatformComponent* EnsureToggleComponent( AFGBuildableTrainPlatformCargo* Platform )
+	{
+		FBFPPlatform& P = GPlatforms.FindOrAdd( Platform );
+		if ( !P.ToggleComp.IsValid() )
+		{
+			UBFPCargoPlatformComponent* C = Platform->FindComponentByClass<UBFPCargoPlatformComponent>();
+			if ( !C )
+			{
+				C = NewObject<UBFPCargoPlatformComponent>( Platform, TEXT( "BFP_ToggleComponent" ) );
+				if ( C )
+				{
+					C->RegisterComponent();
+				}
+			}
+			P.ToggleComp = C;
+		}
+		return P.ToggleComp.Get();
+	}
+
+	/** A standard platform whose per-platform bidirectional toggle is enabled. */
 	bool IsBidirectional( AFGBuildableTrainPlatformCargo* Platform )
 	{
 		if ( !IsStandardPlatform( Platform ) )
@@ -79,18 +108,25 @@ namespace
 			return false;
 		}
 
-		bool bHasInput = false;
-		bool bHasOutput = false;
-		for ( UFGFactoryConnectionComponent* Conn : Platform->GetConnectionComponents() )
+		UBFPCargoPlatformComponent* C = EnsureToggleComponent( Platform );
+		if ( !C )
 		{
-			if ( !Conn || !Conn->IsConnected() )
-			{
-				continue;
-			}
-			if ( Conn->GetDirection() == EFactoryConnectionDirection::FCD_INPUT )       { bHasInput = true; }
-			else if ( Conn->GetDirection() == EFactoryConnectionDirection::FCD_OUTPUT ) { bHasOutput = true; }
+			return false;
 		}
-		return bHasInput && bHasOutput;
+
+		// Resolve the default lazily, on first GAMEPLAY use: by now PostLoadGame has run (during load),
+		// so GLoadedPlatforms is populated. New platforms default ON; platforms that existed in the save
+		// keep their state (OFF). A platform that had a saved toggle arrives with bInitialized already set.
+		if ( !C->bInitialized )
+		{
+			const bool bWasLoaded = GLoadedPlatforms.Contains( Platform );
+			C->mBidirectionalEnabled = bWasLoaded ? 0 : 1;
+			C->bInitialized = 1;
+			UE_LOG( LogBFP, Log, TEXT( "Toggle init on %s: %s (%s)" ), *Platform->GetName(),
+				C->mBidirectionalEnabled ? TEXT( "ON" ) : TEXT( "OFF" ), bWasLoaded ? TEXT( "loaded->off" ) : TEXT( "new->on" ) );
+		}
+
+		return C->IsBidirectionalEnabled();
 	}
 
 	/** Find an inventory component on the actor by its exact name (robust against mInventory pollution). */
@@ -121,30 +157,12 @@ namespace
 
 		if ( !P.LoadInventory.IsValid() )
 		{
-			// Reuse the saved-and-restored component on reload; only create one the first time.
-			UFGInventoryComponent* L = FindInventoryByName( Platform, TEXT( "BFP_LoadInventory" ) );
-			if ( !L )
+			// The component owns the load buffer (creates it cloning the vanilla inventory, reuses the
+			// saved one on reload). Centralising it here keeps a single creation path shared with the UI.
+			if ( UBFPCargoPlatformComponent* C = EnsureToggleComponent( Platform ) )
 			{
-				L = NewObject<UFGInventoryComponent>( Platform, TEXT( "BFP_LoadInventory" ) );
-				if ( L )
-				{
-					L->RegisterComponent();
-					// Clone the vanilla inventory's capacity / slot sizes / filters so the load buffer holds
-					// exactly what a normal freight platform buffer does. Created lazily (first input/dock),
-					// by when the vanilla inventory is fully sized; it is empty there so no contents copy over.
-					if ( UFGInventoryComponent* V = P.UnloadInventory.Get() )
-					{
-						L->CopyFromOtherComponent( V );
-					}
-					else
-					{
-						L->Resize( FMath::Max( 1, static_cast<int32>( Platform->GetmStorageSizeX() ) * static_cast<int32>( Platform->GetmStorageSizeY() ) ) );
-					}
-					UE_LOG( LogBFP, Display, TEXT( "Created load buffer for %s (cloned from unload buffer, size=%d)" ),
-						*Platform->GetName(), L->GetSizeLinear() );
-				}
+				P.LoadInventory = C->EnsureLoadInventory();
 			}
-			P.LoadInventory = L;
 		}
 
 		return P;
@@ -176,7 +194,7 @@ namespace
 			}
 		}
 
-		UE_LOG( LogBFP, Display,
+		UE_LOG( LogBFP, Verbose,
 			TEXT( "[%s] %s | status=%s loadMode=%d activeInv=%p unloadBuf=%d loadBuf=%d wagon=%d docked=%s" ),
 			Event, *Platform->GetName(), DockingStatusToString( Platform->GetDockingStatus() ),
 			Platform->GetIsInLoadMode() ? 1 : 0, static_cast<const void*>( Platform->GetInventory() ),
@@ -187,6 +205,18 @@ namespace
 void FBFPHooks::RegisterHooks()
 {
 	UE_LOG( LogBFP, Display, TEXT( "BidirectionalFreightPlatforms: registering hooks (transient-swap, save-safe)" ) );
+
+	// Track which platforms were loaded from a save (vs freshly built) so the toggle defaults correctly.
+	// Runs before BeginPlay for loaded actors.
+	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatform, PostLoadGame_Implementation,
+		[]( auto&, AFGBuildableTrainPlatform* self, int32, int32 )
+		{
+			if ( self )
+			{
+				GLoadedPlatforms.Add( self );
+				UE_LOG( LogBFP, Verbose, TEXT( "PostLoadGame: %s marked as loaded-from-save" ), *self->GetName() );
+			}
+		} );
 
 	// On spawn: resolve the two buffers and make sure mInventory rests on the unload buffer (this also
 	// cleans up any save that was written by an older build while mInventory pointed at the load buffer).
@@ -216,8 +246,22 @@ void FBFPHooks::RegisterHooks()
 				self->SetmInventory( V );
 			}
 
-			UE_LOG( LogBFP, Display, TEXT( "BeginPlay %s | unloadBuf=%p bidirectional=%d" ),
-				*self->GetName(), static_cast<const void*>( V ), IsBidirectional( self ) ? 1 : 0 );
+			// Create the toggle component now; its default (new vs loaded) is resolved lazily on first
+			// gameplay use, after PostLoadGame has run, so the detection is correct.
+			EnsureToggleComponent( self );
+
+			// Optional: point the platform's interact widget at our custom widget (replaces the station UI).
+			// The class is configured from Blueprint (your module) via UBFPBlueprintLibrary::SetStationInteractWidgetClass.
+			// Null = keep the vanilla UI.
+			const TSoftClassPtr<UFGInteractWidget> CustomWidget = UBFPBlueprintLibrary::GetStationInteractWidgetClass();
+			if ( !CustomWidget.IsNull() )
+			{
+				self->SetmInteractWidgetSoftClass( CustomWidget );
+				UE_LOG( LogBFP, Verbose, TEXT( "Set custom interact widget on %s" ), *self->GetName() );
+			}
+
+			UE_LOG( LogBFP, Verbose, TEXT( "BeginPlay %s | unloadBuf=%p" ),
+				*self->GetName(), static_cast<const void*>( V ) );
 		} );
 
 	// Input redirection: point mInventory at the load buffer for the duration of the collect, restore after.
@@ -234,7 +278,7 @@ void FBFPHooks::RegisterHooks()
 				if ( !P.bLoggedCollectFired )
 				{
 					P.bLoggedCollectFired = true;
-					UE_LOG( LogBFP, Warning, TEXT( "CollectInput hook ACTIVE on %s: inputs -> load buffer %p" ),
+					UE_LOG( LogBFP, Verbose, TEXT( "CollectInput hook ACTIVE on %s: inputs -> load buffer %p" ),
 						*self->GetName(), static_cast<const void*>( P.LoadInventory.Get() ) );
 				}
 				P.CollectSaved = self->GetInventory();
@@ -295,7 +339,7 @@ void FBFPHooks::RegisterHooks()
 			P.bOriginalLoadMode = self->GetIsInLoadMode();
 			self->SetmIsInLoadMode( false );
 
-			UE_LOG( LogBFP, Display, TEXT( "Bidirectional dock on %s: forcing UNLOAD-first" ), *self->GetName() );
+			UE_LOG( LogBFP, Verbose, TEXT( "Bidirectional dock on %s: forcing UNLOAD-first" ), *self->GetName() );
 		} );
 
 	// Bracket the dock-sequence evaluation during the load pass so its "can we load?" checks read the load buffer.
@@ -332,7 +376,7 @@ void FBFPHooks::RegisterHooks()
 					P->bLoadPass = true;
 					self->SetmIsInLoadMode( true );
 					self->SetmPlatformDockingStatus( ETrainPlatformDockingStatus::ETPDS_WaitingToStart );
-					UE_LOG( LogBFP, Warning, TEXT( ">>> LOAD PASS on %s" ), *self->GetName() );
+					UE_LOG( LogBFP, Verbose, TEXT( ">>> LOAD PASS on %s" ), *self->GetName() );
 				}
 				// Dock finished -> restore the configured mode and clear per-dock state.
 				else if ( Status == ETrainPlatformDockingStatus::ETPDS_None )
