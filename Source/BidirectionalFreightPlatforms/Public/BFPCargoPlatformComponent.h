@@ -7,6 +7,15 @@
 #include "FGSaveInterface.h"
 #include "BFPCargoPlatformComponent.generated.h"
 
+/** What a freight platform does for a docked wagon. */
+UENUM( BlueprintType )
+enum class EBFPStationMode : uint8
+{
+	Unload	UMETA( DisplayName = "Unload only" ),
+	Load	UMETA( DisplayName = "Load only" ),
+	Both	UMETA( DisplayName = "Load + Unload (bidirectional)" )
+};
+
 /**
  * Saved + replicated marker component attached at runtime to a freight cargo platform. Holds the
  * per-platform "bidirectional" toggle (load AND unload the same wagon in one stop). Persisted by the
@@ -32,11 +41,26 @@ public:
 	virtual void GatherDependencies_Implementation( TArray<UObject*>& out_dependentObjects ) override {}
 	// End IFGSaveInterface
 
-	/** Whether this platform should load AND unload the same wagon in one stop. */
+	/** The station mode: Unload only / Load only / Both (bidirectional). */
 	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
-	bool IsBidirectionalEnabled() const { return mBidirectionalEnabled != 0; }
+	EBFPStationMode GetStationMode() const { return mStationMode; }
 
-	/** Set the toggle (call from the station UI). Authoritative; replicates to clients. */
+	/** Whether this platform loads AND unloads the same wagon in one stop (mode == Both). */
+	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
+	bool IsBidirectionalEnabled() const { return mStationMode == EBFPStationMode::Both; }
+
+	/** Set the station mode (call from the station UI). Authoritative; replicates to clients. */
+	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms" )
+	void SetStationMode( EBFPStationMode Mode );
+
+	/**
+	 * Convenience for two on/off toggles in the UI (a Load switch + an Unload switch):
+	 * (on,on) => Both, (on,off) => Load, (off,on) => Unload, (off,off) clamps to Unload.
+	 */
+	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms" )
+	void SetLoadUnloadEnabled( bool bLoadEnabled, bool bUnloadEnabled );
+
+	/** Back-compat: true => Both, false => Unload only. */
 	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms" )
 	void SetBidirectionalEnabled( bool bEnabled );
 
@@ -50,6 +74,17 @@ public:
 	/** Server: create the load buffer (cloning the vanilla inventory) if it does not exist yet. */
 	class UFGInventoryComponent* EnsureLoadInventory();
 
+	/** Current-stop wagon transfer rates (items/min), computed by our hooks. 0 between stops. */
+	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
+	float GetLoadRate() const { return mLoadRate; }
+
+	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
+	float GetUnloadRate() const { return mUnloadRate; }
+
+	/** Setters used by the native hooks (authority); the values replicate to clients for the UI. */
+	void SetLoadRate( float Rate ) { mLoadRate = Rate; }
+	void SetUnloadRate( float Rate ) { mUnloadRate = Rate; }
+
 	/** Cached load buffer (also a registered component named "BFP_LoadInventory" on the owner). */
 	UPROPERTY()
 	TObjectPtr<class UFGInventoryComponent> mLoadInventory;
@@ -58,7 +93,15 @@ public:
 	UPROPERTY( SaveGame )
 	uint8 bInitialized : 1;
 
-	/** Whether this platform loads AND unloads the same wagon in one stop. */
+	/** What this platform does for a docked wagon (Unload / Load / Both). */
 	UPROPERTY( SaveGame, Replicated )
-	uint8 mBidirectionalEnabled : 1;
+	EBFPStationMode mStationMode;
+
+	/** Items/min loaded into the wagon for the current stop (transient, replicated, 0 between stops). */
+	UPROPERTY( Replicated )
+	float mLoadRate;
+
+	/** Items/min unloaded from the wagon for the current stop (transient, replicated, 0 between stops). */
+	UPROPERTY( Replicated )
+	float mUnloadRate;
 };

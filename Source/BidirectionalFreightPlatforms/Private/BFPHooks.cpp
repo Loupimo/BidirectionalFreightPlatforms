@@ -56,10 +56,13 @@ namespace
 		TWeakObjectPtr<UFGInventoryComponent> TickSaved;
 		TWeakObjectPtr<UFGInventoryComponent> SeqSaved;
 
-		/** A dock is in progress and we are orchestrating its two passes. */
+		/** A dock is in progress and we are orchestrating it. */
 		bool bDockActive = false;
-		/** The load (second) pass is running (mInventory should be the load buffer during bracketed calls). */
+		/** The load pass is running (mInventory should be the load buffer during bracketed calls).
+		 *  For Load-only mode this is true for the whole dock; for Both it flips on after the unload pass. */
 		bool bLoadPass = false;
+		/** Both mode only: after the unload pass completes, rewind and run a second (load) pass. */
+		bool bTwoPass = false;
 		/** The platform's player-configured load mode, restored when the dock ends. */
 		bool bOriginalLoadMode = false;
 
@@ -68,6 +71,12 @@ namespace
 
 		/** Diagnostics: logged once when the input-redirect hook first fires. */
 		bool bLoggedCollectFired = false;
+
+		/** Wagon-transfer-rate sampling for the current stop (-1 = no baseline / no wagon docked). */
+		int32 LastWagonCount = -1;
+		/** Items moved out of the wagon (unload) and into the wagon (load) so far this stop. */
+		int32 UnloadMoved = 0;
+		int32 LoadMoved = 0;
 	};
 
 	TMap<TWeakObjectPtr<AFGBuildableTrainPlatformCargo>, FBFPPlatform> GPlatforms;
@@ -100,33 +109,48 @@ namespace
 		return P.ToggleComp.Get();
 	}
 
-	/** A standard platform whose per-platform bidirectional toggle is enabled. */
+	/** Resolve (and lazily default) the station mode of a standard platform. */
+	EBFPStationMode ResolveStationMode( AFGBuildableTrainPlatformCargo* Platform )
+	{
+		UBFPCargoPlatformComponent* C = EnsureToggleComponent( Platform );
+		if ( !C )
+		{
+			return EBFPStationMode::Unload;
+		}
+
+		// Resolve the default lazily, on first GAMEPLAY use: by now PostLoadGame has run (during load),
+		// so GLoadedPlatforms is populated. New platforms default to Both; platforms that existed in the
+		// save keep their current single direction (don't silently make an established station bidirectional).
+		// A platform with a saved mode arrives with bInitialized already set.
+		if ( !C->bInitialized )
+		{
+			const bool bWasLoaded = GLoadedPlatforms.Contains( Platform );
+			C->mStationMode = bWasLoaded
+				? ( Platform->GetIsInLoadMode() ? EBFPStationMode::Load : EBFPStationMode::Unload )
+				: EBFPStationMode::Both;
+			C->bInitialized = 1;
+			UE_LOG( LogBFP, Log, TEXT( "Station mode init on %s: %d (%s)" ), *Platform->GetName(),
+				static_cast<int32>( C->mStationMode ), bWasLoaded ? TEXT( "loaded" ) : TEXT( "new->both" ) );
+		}
+
+		return C->GetStationMode();
+	}
+
+	/** A standard platform whose mode is Both (unload AND load the same wagon in one stop). */
 	bool IsBidirectional( AFGBuildableTrainPlatformCargo* Platform )
+	{
+		return IsStandardPlatform( Platform ) && ResolveStationMode( Platform ) == EBFPStationMode::Both;
+	}
+
+	/** A standard platform that loads the wagon (Load or Both) -> input belts feed the load buffer. */
+	bool IsLoadActive( AFGBuildableTrainPlatformCargo* Platform )
 	{
 		if ( !IsStandardPlatform( Platform ) )
 		{
 			return false;
 		}
-
-		UBFPCargoPlatformComponent* C = EnsureToggleComponent( Platform );
-		if ( !C )
-		{
-			return false;
-		}
-
-		// Resolve the default lazily, on first GAMEPLAY use: by now PostLoadGame has run (during load),
-		// so GLoadedPlatforms is populated. New platforms default ON; platforms that existed in the save
-		// keep their state (OFF). A platform that had a saved toggle arrives with bInitialized already set.
-		if ( !C->bInitialized )
-		{
-			const bool bWasLoaded = GLoadedPlatforms.Contains( Platform );
-			C->mBidirectionalEnabled = bWasLoaded ? 0 : 1;
-			C->bInitialized = 1;
-			UE_LOG( LogBFP, Log, TEXT( "Toggle init on %s: %s (%s)" ), *Platform->GetName(),
-				C->mBidirectionalEnabled ? TEXT( "ON" ) : TEXT( "OFF" ), bWasLoaded ? TEXT( "loaded->off" ) : TEXT( "new->on" ) );
-		}
-
-		return C->IsBidirectionalEnabled();
+		const EBFPStationMode M = ResolveStationMode( Platform );
+		return M == EBFPStationMode::Load || M == EBFPStationMode::Both;
 	}
 
 	/** Find an inventory component on the actor by its exact name (robust against mInventory pollution). */
@@ -202,6 +226,68 @@ namespace
 	}
 }
 
+/**
+ * Compute the per-direction wagon transfer rate (items/min) for the current stop. Called every
+ * Factory_Tick while docked. The game's own smoothed rate is unusable for us (it reads the inventory
+ * through mCargoInventoryHandler, which our two-pass mInventory swaps confuse), so we derive it from
+ * the docked wagon's freight count:
+ *   - delta < 0 -> the wagon lost items -> UNLOAD; delta > 0 -> gained -> LOAD (attribution by sign).
+ *   - rate = items moved this stop / the platform's configured (un)load time, which keeps the value
+ *     believable even though the transfer can land in a single bulk step.
+ * Resets to 0 when no wagon is docked (covers undock for both bidirectional and normal platforms).
+ */
+void SampleWagonTransferRate( AFGBuildableTrainPlatformCargo* Platform, FBFPPlatform& P )
+{
+	UBFPCargoPlatformComponent* C = P.ToggleComp.Get();
+	if ( !C )
+	{
+		return;
+	}
+
+	AFGFreightWagon* Wagon = Cast<AFGFreightWagon>( Platform->GetDockedActor() );
+	UFGInventoryComponent* WInv = Wagon ? Wagon->GetFreightInventory() : nullptr;
+
+	if ( !WInv )
+	{
+		// No wagon docked: reset for the next stop and zero the rates (once).
+		if ( P.LastWagonCount != -1 || P.UnloadMoved != 0 || P.LoadMoved != 0 )
+		{
+			P.LastWagonCount = -1;
+			P.UnloadMoved = 0;
+			P.LoadMoved = 0;
+			C->SetUnloadRate( 0.f );
+			C->SetLoadRate( 0.f );
+		}
+		return;
+	}
+
+	const int32 Count = WInv->GetNumItems( nullptr );
+	if ( P.LastWagonCount < 0 )
+	{
+		// First sample of this stop: establish the baseline only.
+		P.LastWagonCount = Count;
+		return;
+	}
+
+	const int32 Delta = Count - P.LastWagonCount;
+	if ( Delta < 0 )      { P.UnloadMoved += -Delta; }
+	else if ( Delta > 0 ) { P.LoadMoved   +=  Delta; }
+	P.LastWagonCount = Count;
+
+	const float TU = Platform->GetmTimeToCompleteUnload();
+	const float TL = Platform->GetmTimeToCompleteLoad();
+	C->SetUnloadRate( TU > 0.f ? P.UnloadMoved / TU * 60.f : 0.f );
+	C->SetLoadRate(   TL > 0.f ? P.LoadMoved   / TL * 60.f : 0.f );
+
+	if ( Delta != 0 )
+	{
+		UE_LOG( LogBFP, Verbose,
+			TEXT( "Rate %s: wagon=%d delta=%d unloadMoved=%d loadMoved=%d TU=%.1f TL=%.1f -> unload=%.1f load=%.1f /min" ),
+			*Platform->GetName(), Count, Delta, P.UnloadMoved, P.LoadMoved, TU, TL,
+			C->GetUnloadRate(), C->GetLoadRate() );
+	}
+}
+
 void FBFPHooks::RegisterHooks()
 {
 	UE_LOG( LogBFP, Display, TEXT( "BidirectionalFreightPlatforms: registering hooks (transient-swap, save-safe)" ) );
@@ -251,7 +337,7 @@ void FBFPHooks::RegisterHooks()
 			EnsureToggleComponent( self );
 
 			// Optional: point the platform's interact widget at our custom widget (replaces the station UI).
-			// The class is configured from Blueprint (your module) via UBFPBlueprintLibrary::SetStationInteractWidgetClass.
+			// The class is configured from Blueprint via UBFPBlueprintLibrary::SetStationInteractWidgetClass.
 			// Null = keep the vanilla UI.
 			const TSoftClassPtr<UFGInteractWidget> CustomWidget = UBFPBlueprintLibrary::GetStationInteractWidgetClass();
 			if ( !CustomWidget.IsNull() )
@@ -265,10 +351,11 @@ void FBFPHooks::RegisterHooks()
 		} );
 
 	// Input redirection: point mInventory at the load buffer for the duration of the collect, restore after.
+	// Active whenever loading is part of the mode (Load or Both) so input belts always feed the load buffer.
 	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_CollectInput_Implementation,
 		[]( auto&, AFGBuildableTrainPlatformCargo* self )
 		{
-			if ( !IsBidirectional( self ) )
+			if ( !IsLoadActive( self ) )
 			{
 				return;
 			}
@@ -313,33 +400,64 @@ void FBFPHooks::RegisterHooks()
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, Factory_Tick,
 		[]( AFGBuildableTrainPlatformCargo* self, float )
 		{
-			if ( FBFPPlatform* P = GPlatforms.Find( self ) )
+			FBFPPlatform* P = GPlatforms.Find( self );
+			if ( !P )
 			{
-				if ( P->TickSaved.IsValid() )
-				{
-					self->SetmInventory( P->TickSaved.Get() );
-					P->TickSaved = nullptr;
-				}
+				return;
 			}
+			// Restore the load-pass bracket first, so the wagon-rate sample reads at-rest state.
+			if ( P->TickSaved.IsValid() )
+			{
+				self->SetmInventory( P->TickSaved.Get() );
+				P->TickSaved = nullptr;
+			}
+			SampleWagonTransferRate( self, *P );
 		} );
 
-	// A dock begins: force the first pass to be UNLOAD (mInventory already rests on the unload buffer).
+	// A dock begins: set up the passes for this stop according to the station mode.
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, NotifyTrainDocked,
 		[]( AFGBuildableTrainPlatformCargo* self, AFGRailroadVehicle*, AFGBuildableRailroadStation* )
 		{
 			LogPlatformState( TEXT( "NotifyTrainDocked" ), self );
-			if ( !IsBidirectional( self ) )
+			if ( !IsStandardPlatform( self ) )
 			{
 				return;
 			}
 
+			const EBFPStationMode Mode = ResolveStationMode( self );
 			FBFPPlatform& P = SetupPlatform( self );
 			P.bDockActive = true;
-			P.bLoadPass = false;
 			P.bOriginalLoadMode = self->GetIsInLoadMode();
-			self->SetmIsInLoadMode( false );
 
-			UE_LOG( LogBFP, Verbose, TEXT( "Bidirectional dock on %s: forcing UNLOAD-first" ), *self->GetName() );
+			switch ( Mode )
+			{
+			case EBFPStationMode::Both:
+				// Unload first (mInventory rests on the unload buffer), then a second LOAD pass is added
+				// by the two-pass driver when the unload completes.
+				P.bLoadPass = false;
+				P.bTwoPass = true;
+				self->SetmIsInLoadMode( false );
+				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: BOTH (unload-first)" ), *self->GetName() );
+				break;
+
+			case EBFPStationMode::Load:
+				// Single load pass for the whole dock: mInventory is bracketed to the load buffer during
+				// the transfer (same machinery as Both's load pass), no unload pass.
+				P.bLoadPass = true;
+				P.bTwoPass = false;
+				self->SetmIsInLoadMode( true );
+				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: LOAD only" ), *self->GetName() );
+				break;
+
+			case EBFPStationMode::Unload:
+			default:
+				// Vanilla single unload pass: mInventory stays on the unload buffer, no brackets.
+				P.bLoadPass = false;
+				P.bTwoPass = false;
+				self->SetmIsInLoadMode( false );
+				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: UNLOAD only" ), *self->GetName() );
+				break;
+			}
 		} );
 
 	// Bracket the dock-sequence evaluation during the load pass so its "can we load?" checks read the load buffer.
@@ -370,8 +488,9 @@ void FBFPHooks::RegisterHooks()
 
 			if ( P->bDockActive )
 			{
-				// Unload pass finished -> start the LOAD pass (no persistent inventory swap; the brackets do it).
-				if ( Status == ETrainPlatformDockingStatus::ETPDS_Complete && !P->bLoadPass )
+				// Both mode only: unload pass finished -> start the LOAD pass (no persistent inventory swap;
+				// the brackets do it). Load-only already has bLoadPass=true; Unload-only has bTwoPass=false.
+				if ( P->bTwoPass && !P->bLoadPass && Status == ETrainPlatformDockingStatus::ETPDS_Complete )
 				{
 					P->bLoadPass = true;
 					self->SetmIsInLoadMode( true );
@@ -384,6 +503,7 @@ void FBFPHooks::RegisterHooks()
 					self->SetmIsInLoadMode( P->bOriginalLoadMode );
 					P->bDockActive = false;
 					P->bLoadPass = false;
+					P->bTwoPass = false;
 				}
 			}
 
@@ -407,6 +527,7 @@ void FBFPHooks::RegisterHooks()
 					self->SetmIsInLoadMode( P->bOriginalLoadMode );
 					P->bDockActive = false;
 					P->bLoadPass = false;
+					P->bTwoPass = false;
 				}
 				if ( P->UnloadInventory.IsValid() )
 				{
