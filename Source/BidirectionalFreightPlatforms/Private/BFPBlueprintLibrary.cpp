@@ -10,6 +10,7 @@
 #include "GameFramework/PlayerController.h"
 #include "FGPipeConnectionComponent.h"
 #include "Buildables/FGBuildablePipeline.h"
+#include "FGPipeSubsystem.h"
 
 TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::StationInteractWidgetClass = nullptr;
 TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::FluidStationInteractWidgetClass = nullptr;
@@ -160,4 +161,35 @@ float UBFPBlueprintLibrary::GetMaxPipeFlowRate( AFGBuildableTrainPlatformCargo* 
 		}
 	}
 	return MaxLimit;
+}
+
+void UBFPBlueprintLibrary::FlushStationPipes( AFGBuildableTrainPlatformCargo* Platform, bool bInput )
+{
+	if ( !Platform )
+	{
+		return;
+	}
+	AFGPipeSubsystem* Subsystem = AFGPipeSubsystem::GetPipeSubsystem( Platform );
+	if ( !Subsystem )
+	{
+		return;
+	}
+
+	// Use the platform's own input/output connection arrays (authoritative in/out classification).
+	const TArray<TObjectPtr<UFGPipeConnectionComponent>> Connections = bInput
+		? Platform->GetmPipeInputConnections()
+		: Platform->GetmPipeOutputConnections();
+	for ( UFGPipeConnectionComponent* Conn : Connections )
+	{
+		if ( !Conn || !Conn->IsConnected() )
+		{
+			continue;
+		}
+		const UFGPipeConnectionComponentBase* Other = Conn->GetConnection();
+		if ( AActor* Integrant = Other ? Other->GetOwner() : nullptr )
+		{
+			// Flushes the whole network the connected integrant belongs to (clears fluid + empties contents).
+			Subsystem->FlushPipeNetworkFromIntegrant( Integrant );
+		}
+	}
 }

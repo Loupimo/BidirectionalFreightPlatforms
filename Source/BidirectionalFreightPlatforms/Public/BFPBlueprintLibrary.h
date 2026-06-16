@@ -94,6 +94,13 @@ public:
 	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid" )
 	static float GetMaxPipeFlowRate( AFGBuildableTrainPlatformCargo* Platform );
 
+	/**
+	 * Flush (empty + clear fluid type) the pipe network connected to the platform's INPUT side
+	 * (bInput = true) or OUTPUT side (bInput = false). Call from your flush button's event.
+	 */
+	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms|Fluid" )
+	static void FlushStationPipes( AFGBuildableTrainPlatformCargo* Platform, bool bInput );
+
 private:
 	static TSoftClassPtr<UFGInteractWidget> StationInteractWidgetClass;
 	static TSoftClassPtr<UFGInteractWidget> FluidStationInteractWidgetClass;

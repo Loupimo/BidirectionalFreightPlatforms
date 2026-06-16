@@ -158,23 +158,6 @@ namespace
 		return C->GetStationMode();
 	}
 
-	/** A standard platform whose mode is Both (unload AND load the same wagon in one stop). */
-	bool IsBidirectional( AFGBuildableTrainPlatformCargo* Platform )
-	{
-		return IsSupportedPlatform(Platform ) && ResolveStationMode( Platform ) == EBFPStationMode::Both;
-	}
-
-	/** A standard platform that loads the wagon (Load or Both) -> input belts feed the load buffer. */
-	bool IsLoadActive( AFGBuildableTrainPlatformCargo* Platform )
-	{
-		if ( !IsSupportedPlatform(Platform ) )
-		{
-			return false;
-		}
-		const EBFPStationMode M = ResolveStationMode( Platform );
-		return M == EBFPStationMode::Load || M == EBFPStationMode::Both;
-	}
-
 	/** Find an inventory component on the actor by its exact name (robust against mInventory pollution). */
 	UFGInventoryComponent* FindInventoryByName( AActor* Actor, const TCHAR* Name )
 	{
@@ -357,13 +340,20 @@ void FBFPHooks::RegisterHooks()
 				*self->GetName(), static_cast<const void*>( V ) );
 		} );
 
-	// Input redirection: point mInventory at the load buffer for the duration of the collect, restore after.
-	// Active whenever loading is part of the mode (Load or Both) so input belts always feed the load buffer.
+	// Input redirection / blocking for solid platforms:
+	//  - Load / Both: point mInventory at the load buffer for the collect so input belts feed it.
+	//  - Unload only: the load side is OFF, so CANCEL the collect entirely — otherwise input belts would
+	//    feed mInventory and pass straight through to the output belts.
 	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_CollectInput_Implementation,
-		[]( auto&, AFGBuildableTrainPlatformCargo* self )
+		[]( auto& scope, AFGBuildableTrainPlatformCargo* self )
 		{
-			if ( !IsLoadActive( self ) || self->GetmFreightCargoType() != EFreightCargoType::FCT_Standard )
+			if ( self->GetmFreightCargoType() != EFreightCargoType::FCT_Standard )
 			{
+				return; // not a solid platform: let vanilla run
+			}
+			if ( ResolveStationMode( self ) == EBFPStationMode::Unload )
+			{
+				scope.Cancel(); // unload-only: input belts are inert (no pass-through)
 				return;
 			}
 			FBFPPlatform& P = SetupPlatform( self );
@@ -392,14 +382,19 @@ void FBFPHooks::RegisterHooks()
 			}
 		} );
 
-	// FLUID input redirection: same idea as Factory_CollectInput but for liquid platforms, whose input
-	// comes from pipes (Factory_PullPipeInput) instead of belts. Point mInventory at the load buffer for
-	// the duration of the pull so incoming fluid fills the load buffer, then restore.
+	// FLUID equivalent: liquid platforms pull input from pipes (Factory_PullPipeInput) instead of belts.
+	//  - Load / Both: redirect the pull into the load buffer.
+	//  - Unload only: cancel the pull so input pipes are inert (no fluid pass-through to the output).
 	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_PullPipeInput_Implementation,
-		[]( auto&, AFGBuildableTrainPlatformCargo* self, float )
+		[]( auto& scope, AFGBuildableTrainPlatformCargo* self, float )
 		{
-			if ( !IsLoadActive( self ) || self->GetmFreightCargoType() != EFreightCargoType::FCT_Liquid )
+			if ( self->GetmFreightCargoType() != EFreightCargoType::FCT_Liquid )
 			{
+				return;
+			}
+			if ( ResolveStationMode( self ) == EBFPStationMode::Unload )
+			{
+				scope.Cancel(); // unload-only: input pipes are inert (no pass-through)
 				return;
 			}
 			FBFPPlatform& P = SetupPlatform( self );
