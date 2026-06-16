@@ -115,10 +115,22 @@ UFGInventoryComponent* UBFPCargoPlatformComponent::EnsureLoadInventory()
 		if ( L )
 		{
 			L->RegisterComponent();
-			// Clone the vanilla inventory's capacity / slot sizes / filters (it is empty on a fresh platform).
 			if ( V )
 			{
+				// Clone capacity / slot sizes / filters. CopyFromOtherComponent ALSO copies the items, so for
+				// a vanilla station that already held cargo this would DUPLICATE it. De-duplicate by keeping
+				// the items only on the inventory the mode actually uses, and emptying the other:
 				L->CopyFromOtherComponent( V );
+				if ( mStationMode == EBFPStationMode::Load )
+				{
+					// Loading reads from the load buffer -> the staged items belong there; clear the unload buffer.
+					V->Empty();
+				}
+				else
+				{
+					// Unload / Both -> the load buffer starts empty; items (if any) stay in the unload buffer.
+					L->Empty();
+				}
 			}
 		}
 	}

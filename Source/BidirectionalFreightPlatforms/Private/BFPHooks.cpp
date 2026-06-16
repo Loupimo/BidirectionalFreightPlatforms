@@ -81,9 +81,6 @@ namespace
 
 	TMap<TWeakObjectPtr<AFGBuildableTrainPlatformCargo>, FBFPPlatform> GPlatforms;
 
-	/** Platforms that went through PostLoadGame this session (i.e. loaded from a save, not freshly built). */
-	TSet<TWeakObjectPtr<AFGBuildableTrainPlatform>> GLoadedPlatforms;
-
 	bool IsStandardPlatform( AFGBuildableTrainPlatformCargo* Platform )
 	{
 		return Platform && Platform->GetmFreightCargoType() == EFreightCargoType::FCT_Standard;
@@ -109,7 +106,33 @@ namespace
 		return P.ToggleComp.Get();
 	}
 
-	/** Resolve (and lazily default) the station mode of a standard platform. */
+	/**
+	 * Resolve the station mode default ONCE, at BeginPlay (a safe context, unlike a PostLoadGame hook
+	 * which crashed dereferencing the object mid-deserialization). A platform whose BeginPlay runs at
+	 * world time ~0 was loaded from the save -> keep its current direction (Load/Unload, don't silently
+	 * make an established station bidirectional). One placed later (during play) is new -> default to Both.
+	 * A platform whose toggle came from a (mod) save arrives with bInitialized already set -> untouched.
+	 */
+	void ResolveStationModeOnBeginPlay( AFGBuildableTrainPlatformCargo* Platform, UBFPCargoPlatformComponent* C )
+	{
+		if ( !C || C->bInitialized )
+		{
+			return;
+		}
+
+		const UWorld* World = Platform->GetWorld();
+		const float WorldTime = World ? World->GetTimeSeconds() : 0.f;
+		const bool bLoaded = WorldTime < 1.0f; // BeginPlay before the first tick => loaded from save
+		const EBFPStationMode Mode = bLoaded
+			? ( Platform->GetIsInLoadMode() ? EBFPStationMode::Load : EBFPStationMode::Unload )
+			: EBFPStationMode::Both;
+		C->SetStationMode( Mode ); // sets mode + bInitialized + ensures the load buffer when loading is involved
+		UE_LOG( LogBFP, Display, TEXT( "Station mode init on %s: %d (%s, t=%.2f)" ),
+			*Platform->GetName(), static_cast<int32>( Mode ),
+			bLoaded ? TEXT( "loaded" ) : TEXT( "new->both" ), WorldTime );
+	}
+
+	/** Station mode of a standard platform (resolved at BeginPlay; conservative fallback if not yet). */
 	EBFPStationMode ResolveStationMode( AFGBuildableTrainPlatformCargo* Platform )
 	{
 		UBFPCargoPlatformComponent* C = EnsureToggleComponent( Platform );
@@ -117,22 +140,12 @@ namespace
 		{
 			return EBFPStationMode::Unload;
 		}
-
-		// Resolve the default lazily, on first GAMEPLAY use: by now PostLoadGame has run (during load),
-		// so GLoadedPlatforms is populated. New platforms default to Both; platforms that existed in the
-		// save keep their current single direction (don't silently make an established station bidirectional).
-		// A platform with a saved mode arrives with bInitialized already set.
+		// Safety net if a hook somehow runs before BeginPlay resolved it: keep the current direction
+		// rather than forcing bidirectional on an established platform.
 		if ( !C->bInitialized )
 		{
-			const bool bWasLoaded = GLoadedPlatforms.Contains( Platform );
-			C->mStationMode = bWasLoaded
-				? ( Platform->GetIsInLoadMode() ? EBFPStationMode::Load : EBFPStationMode::Unload )
-				: EBFPStationMode::Both;
-			C->bInitialized = 1;
-			UE_LOG( LogBFP, Log, TEXT( "Station mode init on %s: %d (%s)" ), *Platform->GetName(),
-				static_cast<int32>( C->mStationMode ), bWasLoaded ? TEXT( "loaded" ) : TEXT( "new->both" ) );
+			C->SetStationMode( Platform->GetIsInLoadMode() ? EBFPStationMode::Load : EBFPStationMode::Unload );
 		}
-
 		return C->GetStationMode();
 	}
 
@@ -281,19 +294,7 @@ void FBFPHooks::RegisterHooks()
 {
 	UE_LOG( LogBFP, Display, TEXT( "BidirectionalFreightPlatforms: registering hooks (transient-swap, save-safe)" ) );
 
-	// Track which platforms were loaded from a save (vs freshly built) so the toggle defaults correctly.
-	// Runs before BeginPlay for loaded actors.
-	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatform, PostLoadGame_Implementation,
-		[]( auto&, AFGBuildableTrainPlatform* self, int32, int32 )
-		{
-			if ( self )
-			{
-				GLoadedPlatforms.Add( self );
-				UE_LOG( LogBFP, Verbose, TEXT( "PostLoadGame: %s marked as loaded-from-save" ), *self->GetName() );
-			}
-		} );
-
-	// On spawn: resolve the two buffers and make sure mInventory rests on the unload buffer (this also
+// On spawn: resolve the two buffers and make sure mInventory rests on the unload buffer (this also
 	// cleans up any save that was written by an older build while mInventory pointed at the load buffer).
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, BeginPlay,
 		[]( AFGBuildableTrainPlatformCargo* self )
@@ -321,9 +322,13 @@ void FBFPHooks::RegisterHooks()
 				self->SetmInventory( V );
 			}
 
-			// Create the toggle component now; its default (new vs loaded) is resolved lazily on first
-			// gameplay use, after PostLoadGame has run, so the detection is correct.
-			EnsureToggleComponent( self );
+			// Create the toggle component and resolve its default mode now. BeginPlay is a safe context to
+			// tell a loaded platform (world time ~0) from a newly-placed one (later), without a PostLoadGame
+			// hook (which crashed dereferencing the object mid-deserialization).
+			if ( UBFPCargoPlatformComponent* C = EnsureToggleComponent( self ) )
+			{
+				ResolveStationModeOnBeginPlay( self, C );
+			}
 
 			// Optional: point the platform's interact widget at our custom widget (replaces the station UI).
 			// The class is configured from Blueprint via UBFPBlueprintLibrary::SetStationInteractWidgetClass.
