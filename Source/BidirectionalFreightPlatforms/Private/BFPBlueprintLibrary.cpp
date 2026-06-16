@@ -8,8 +8,11 @@
 #include "FGHUD.h"
 #include "UI/FGGameUI.h"
 #include "GameFramework/PlayerController.h"
+#include "FGPipeConnectionComponent.h"
+#include "Buildables/FGBuildablePipeline.h"
 
 TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::StationInteractWidgetClass = nullptr;
+TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::FluidStationInteractWidgetClass = nullptr;
 
 void UBFPBlueprintLibrary::SetStationInteractWidgetClass( TSoftClassPtr<UFGInteractWidget> WidgetClass )
 {
@@ -19,6 +22,16 @@ void UBFPBlueprintLibrary::SetStationInteractWidgetClass( TSoftClassPtr<UFGInter
 TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::GetStationInteractWidgetClass()
 {
 	return StationInteractWidgetClass;
+}
+
+void UBFPBlueprintLibrary::SetFluidStationInteractWidgetClass( TSoftClassPtr<UFGInteractWidget> WidgetClass )
+{
+	FluidStationInteractWidgetClass = WidgetClass;
+}
+
+TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::GetFluidStationInteractWidgetClass()
+{
+	return FluidStationInteractWidgetClass;
 }
 
 UFGInventoryComponent* UBFPBlueprintLibrary::GetUnloadInventory( AFGBuildableTrainPlatformCargo* Platform )
@@ -86,4 +99,65 @@ void UBFPBlueprintLibrary::CloseStationUI( UFGInteractWidget* Widget )
 		// Exactly what the Escape key triggers: pops the top interact widget and restores input/camera.
 		GameUI->Native_HandlePauseGamePressed();
 	}
+}
+
+namespace
+{
+	// SF stores fluid amounts as integers where 1 m³ = 1000 units. Divide to display m³.
+	constexpr float BFP_FluidUnitsPerM3 = 1000.f;
+}
+
+float UBFPBlueprintLibrary::GetFluidAmountM3( UFGInventoryComponent* Inventory )
+{
+	return Inventory ? Inventory->GetNumItems( nullptr ) / BFP_FluidUnitsPerM3 : 0.f;
+}
+
+float UBFPBlueprintLibrary::GetFluidCapacityM3( UFGInventoryComponent* Inventory )
+{
+	if ( !Inventory || Inventory->GetSizeLinear() <= 0 )
+	{
+		return 0.f;
+	}
+	return Inventory->GetSlotSize( 0, nullptr ) / BFP_FluidUnitsPerM3;
+}
+
+TSubclassOf<UFGItemDescriptor> UBFPBlueprintLibrary::GetFluidClass( UFGInventoryComponent* Inventory )
+{
+	if ( !Inventory || Inventory->GetSizeLinear() <= 0 )
+	{
+		return nullptr;
+	}
+	TSubclassOf<UFGItemDescriptor> Cls = Inventory->GetItemClassAtIndex( 0 );
+	if ( !Cls )
+	{
+		// Empty slot: fall back to the configured allowed fluid type, if any.
+		Cls = Inventory->GetAllowedItemOnIndex( 0 );
+	}
+	return Cls;
+}
+
+float UBFPBlueprintLibrary::GetMaxPipeFlowRate( AFGBuildableTrainPlatformCargo* Platform )
+{
+	if ( !Platform )
+	{
+		return 0.f;
+	}
+
+	// Walk the platform's pipe connections to the pipelines actually attached, and take the best limit.
+	float MaxLimit = 0.f;
+	TInlineComponentArray<UFGPipeConnectionComponent*> PipeConns;
+	Platform->GetComponents( PipeConns );
+	for ( UFGPipeConnectionComponent* Conn : PipeConns )
+	{
+		if ( !Conn || !Conn->IsConnected() )
+		{
+			continue;
+		}
+		const UFGPipeConnectionComponentBase* Other = Conn->GetConnection();
+		if ( const AFGBuildablePipeline* Pipe = Other ? Cast<AFGBuildablePipeline>( Other->GetOwner() ) : nullptr )
+		{
+			MaxLimit = FMath::Max( MaxLimit, Pipe->GetFlowLimit() );
+		}
+	}
+	return MaxLimit;
 }

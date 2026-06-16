@@ -9,6 +9,7 @@
 
 class AFGBuildableTrainPlatformCargo;
 class UFGInventoryComponent;
+class UFGItemDescriptor;
 
 /**
  * Small library to feed mod-wide settings from Blueprint (e.g. your GameInstance / GameWorld module)
@@ -21,15 +22,25 @@ class BIDIRECTIONALFREIGHTPLATFORMS_API UBFPBlueprintLibrary : public UBlueprint
 
 public:
 	/**
-	 * Set the widget class that replaces the freight platform station UI.
+	 * Set the widget class that replaces the SOLID freight platform station UI.
 	 * Call this once at startup from your module (expose an EditDefaultsOnly TSoftClassPtr<UFGInteractWidget>
 	 * on the module and pass it here). Leave unset to keep the vanilla UI.
 	 */
 	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms" )
 	static void SetStationInteractWidgetClass( TSoftClassPtr<UFGInteractWidget> WidgetClass );
 
-	/** The configured station UI widget class (null = keep vanilla). Read by the native hooks. */
+	/** The configured SOLID station UI widget class (null = keep vanilla). Read by the native hooks. */
 	static TSoftClassPtr<UFGInteractWidget> GetStationInteractWidgetClass();
+
+	/**
+	 * Set the widget class that replaces the FLUID (liquid) freight platform station UI. Same idea as the
+	 * solid one but a separate widget, because fluid inventories display as tanks/gauges, not item grids.
+	 */
+	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms" )
+	static void SetFluidStationInteractWidgetClass( TSoftClassPtr<UFGInteractWidget> WidgetClass );
+
+	/** The configured FLUID station UI widget class (null = keep vanilla). Read by the native hooks. */
+	static TSoftClassPtr<UFGInteractWidget> GetFluidStationInteractWidgetClass();
 
 	/**
 	 * UNLOAD buffer (wagon -> output belts) = the vanilla inventory. This is the "outgoing" panel.
@@ -65,6 +76,25 @@ public:
 	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms" )
 	static void CloseStationUI( UFGInteractWidget* Widget );
 
+	// ---- Fluid helpers (for the liquid station UI) ----
+
+	/** Current fluid amount in this buffer, in m³ (the inventory stores fluids as 1 m³ = 1000 units). */
+	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid" )
+	static float GetFluidAmountM3( UFGInventoryComponent* Inventory );
+
+	/** Fluid capacity of this buffer (slot 0), in m³. */
+	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid" )
+	static float GetFluidCapacityM3( UFGInventoryComponent* Inventory );
+
+	/** The fluid currently in this buffer; falls back to the slot's configured type when empty (null if neither). */
+	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid" )
+	static TSubclassOf<UFGItemDescriptor> GetFluidClass( UFGInventoryComponent* Inventory );
+
+	/** Max flow rate of the best pipe connected to the platform (same unit as Get In/OutflowRate). 0 if none. */
+	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid" )
+	static float GetMaxPipeFlowRate( AFGBuildableTrainPlatformCargo* Platform );
+
 private:
 	static TSoftClassPtr<UFGInteractWidget> StationInteractWidgetClass;
+	static TSoftClassPtr<UFGInteractWidget> FluidStationInteractWidgetClass;
 };

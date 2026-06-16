@@ -52,7 +52,8 @@ namespace
 		TWeakObjectPtr<UFGInventoryComponent> LoadInventory;
 
 		/** Saved mInventory across the various transient swaps (one per bracket site, never nested). */
-		TWeakObjectPtr<UFGInventoryComponent> CollectSaved;
+		TWeakObjectPtr<UFGInventoryComponent> CollectSaved;   // solid input belts
+		TWeakObjectPtr<UFGInventoryComponent> PipeInputSaved; // fluid input pipes
 		TWeakObjectPtr<UFGInventoryComponent> TickSaved;
 		TWeakObjectPtr<UFGInventoryComponent> SeqSaved;
 
@@ -69,8 +70,9 @@ namespace
 		/** Cached per-platform toggle component (saved + replicated bidirectional flag). */
 		TWeakObjectPtr<UBFPCargoPlatformComponent> ToggleComp;
 
-		/** Diagnostics: logged once when the input-redirect hook first fires. */
+		/** Diagnostics: logged once when each input-redirect hook first fires. */
 		bool bLoggedCollectFired = false;
+		bool bLoggedPipeFired = false;
 
 		/** Wagon-transfer-rate sampling for the current stop (-1 = no baseline / no wagon docked). */
 		int32 LastWagonCount = -1;
@@ -81,9 +83,16 @@ namespace
 
 	TMap<TWeakObjectPtr<AFGBuildableTrainPlatformCargo>, FBFPPlatform> GPlatforms;
 
-	bool IsStandardPlatform( AFGBuildableTrainPlatformCargo* Platform )
+	/** Solid (FCT_Standard) or fluid (FCT_Liquid) cargo platform — both use the same two-pass machinery
+	 *  (only the input-redirect hook differs: belts use Factory_CollectInput, pipes use Factory_PullPipeInput). */
+	bool IsSupportedPlatform( AFGBuildableTrainPlatformCargo* Platform )
 	{
-		return Platform && Platform->GetmFreightCargoType() == EFreightCargoType::FCT_Standard;
+		if ( !Platform )
+		{
+			return false;
+		}
+		const EFreightCargoType Type = Platform->GetmFreightCargoType();
+		return Type == EFreightCargoType::FCT_Standard || Type == EFreightCargoType::FCT_Liquid;
 	}
 
 	/** Find-or-create (and cache) the saved toggle component. Does NOT resolve the default yet. */
@@ -127,7 +136,7 @@ namespace
 			? ( Platform->GetIsInLoadMode() ? EBFPStationMode::Load : EBFPStationMode::Unload )
 			: EBFPStationMode::Both;
 		C->SetStationMode( Mode ); // sets mode + bInitialized + ensures the load buffer when loading is involved
-		UE_LOG( LogBFP, Display, TEXT( "Station mode init on %s: %d (%s, t=%.2f)" ),
+		UE_LOG( LogBFP, Verbose, TEXT( "Station mode init on %s: %d (%s, t=%.2f)" ),
 			*Platform->GetName(), static_cast<int32>( Mode ),
 			bLoaded ? TEXT( "loaded" ) : TEXT( "new->both" ), WorldTime );
 	}
@@ -152,13 +161,13 @@ namespace
 	/** A standard platform whose mode is Both (unload AND load the same wagon in one stop). */
 	bool IsBidirectional( AFGBuildableTrainPlatformCargo* Platform )
 	{
-		return IsStandardPlatform( Platform ) && ResolveStationMode( Platform ) == EBFPStationMode::Both;
+		return IsSupportedPlatform(Platform ) && ResolveStationMode( Platform ) == EBFPStationMode::Both;
 	}
 
 	/** A standard platform that loads the wagon (Load or Both) -> input belts feed the load buffer. */
 	bool IsLoadActive( AFGBuildableTrainPlatformCargo* Platform )
 	{
-		if ( !IsStandardPlatform( Platform ) )
+		if ( !IsSupportedPlatform(Platform ) )
 		{
 			return false;
 		}
@@ -235,7 +244,7 @@ namespace
 			TEXT( "[%s] %s | status=%s loadMode=%d activeInv=%p unloadBuf=%d loadBuf=%d wagon=%d docked=%s" ),
 			Event, *Platform->GetName(), DockingStatusToString( Platform->GetDockingStatus() ),
 			Platform->GetIsInLoadMode() ? 1 : 0, static_cast<const void*>( Platform->GetInventory() ),
-			UnloadItems, LoadItems, WagonItems, *GetNameSafe( Platform->GetDockedActor() ) );
+			UnloadItems, LoadItems, WagonItems, *GetNameSafe( Platform->GetDockedActor() ) );	
 	}
 }
 
@@ -284,7 +293,7 @@ void FinalizeTransferRate( AFGBuildableTrainPlatformCargo* Platform, FBFPPlatfor
 		const float LoadRate   = TL > 0.f ? P.LoadMoved   / TL * 60.f : 0.f;
 		// Sets the (replicated) rates AND fires OnTransferRateUpdated for the UI to refresh on.
 		C->PublishTransferRates( LoadRate, UnloadRate );
-		UE_LOG( LogBFP, Display,
+		UE_LOG( LogBFP, Verbose,
 			TEXT( "Rate FINALIZE %s: unloadMoved=%d loadMoved=%d -> unload=%.1f load=%.1f /min (event fired, held until next train)" ),
 			*Platform->GetName(), P.UnloadMoved, P.LoadMoved, UnloadRate, LoadRate );
 	}
@@ -299,7 +308,7 @@ void FBFPHooks::RegisterHooks()
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, BeginPlay,
 		[]( AFGBuildableTrainPlatformCargo* self )
 		{
-			if ( !self || !IsStandardPlatform( self ) )
+			if ( !self || !IsSupportedPlatform(self ) )
 			{
 				return;
 			}
@@ -331,13 +340,17 @@ void FBFPHooks::RegisterHooks()
 			}
 
 			// Optional: point the platform's interact widget at our custom widget (replaces the station UI).
-			// The class is configured from Blueprint via UBFPBlueprintLibrary::SetStationInteractWidgetClass.
-			// Null = keep the vanilla UI.
-			const TSoftClassPtr<UFGInteractWidget> CustomWidget = UBFPBlueprintLibrary::GetStationInteractWidgetClass();
+			// Solid and fluid use SEPARATE widget classes (item grids vs tanks/gauges), both configured from
+			// Blueprint via UBFPBlueprintLibrary. Null for a type = keep that type's vanilla UI.
+			const bool bFluid = self->GetmFreightCargoType() == EFreightCargoType::FCT_Liquid;
+			const TSoftClassPtr<UFGInteractWidget> CustomWidget = bFluid
+				? UBFPBlueprintLibrary::GetFluidStationInteractWidgetClass()
+				: UBFPBlueprintLibrary::GetStationInteractWidgetClass();
 			if ( !CustomWidget.IsNull() )
 			{
 				self->SetmInteractWidgetSoftClass( CustomWidget );
-				UE_LOG( LogBFP, Verbose, TEXT( "Set custom interact widget on %s" ), *self->GetName() );
+				UE_LOG( LogBFP, Verbose, TEXT( "Set custom interact widget on %s (%s)" ),
+					*self->GetName(), bFluid ? TEXT( "fluid" ) : TEXT( "solid" ) );
 			}
 
 			UE_LOG( LogBFP, Verbose, TEXT( "BeginPlay %s | unloadBuf=%p" ),
@@ -349,7 +362,7 @@ void FBFPHooks::RegisterHooks()
 	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_CollectInput_Implementation,
 		[]( auto&, AFGBuildableTrainPlatformCargo* self )
 		{
-			if ( !IsLoadActive( self ) )
+			if ( !IsLoadActive( self ) || self->GetmFreightCargoType() != EFreightCargoType::FCT_Standard )
 			{
 				return;
 			}
@@ -375,6 +388,42 @@ void FBFPHooks::RegisterHooks()
 				{
 					self->SetmInventory( P->CollectSaved.Get() );
 					P->CollectSaved = nullptr;
+				}
+			}
+		} );
+
+	// FLUID input redirection: same idea as Factory_CollectInput but for liquid platforms, whose input
+	// comes from pipes (Factory_PullPipeInput) instead of belts. Point mInventory at the load buffer for
+	// the duration of the pull so incoming fluid fills the load buffer, then restore.
+	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_PullPipeInput_Implementation,
+		[]( auto&, AFGBuildableTrainPlatformCargo* self, float )
+		{
+			if ( !IsLoadActive( self ) || self->GetmFreightCargoType() != EFreightCargoType::FCT_Liquid )
+			{
+				return;
+			}
+			FBFPPlatform& P = SetupPlatform( self );
+			if ( P.LoadInventory.IsValid() )
+			{
+				if ( !P.bLoggedPipeFired )
+				{
+					P.bLoggedPipeFired = true;
+					UE_LOG( LogBFP, Display, TEXT( "PullPipeInput hook ACTIVE on %s: pipes -> load buffer %p" ),
+						*self->GetName(), static_cast<const void*>( P.LoadInventory.Get() ) );
+				}
+				P.PipeInputSaved = self->GetInventory();
+				self->SetmInventory( P.LoadInventory.Get() );
+			}
+		} );
+	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, Factory_PullPipeInput_Implementation,
+		[]( AFGBuildableTrainPlatformCargo* self, float )
+		{
+			if ( FBFPPlatform* P = GPlatforms.Find( self ) )
+			{
+				if ( P->PipeInputSaved.IsValid() )
+				{
+					self->SetmInventory( P->PipeInputSaved.Get() );
+					P->PipeInputSaved = nullptr;
 				}
 			}
 		} );
@@ -413,7 +462,7 @@ void FBFPHooks::RegisterHooks()
 		[]( AFGBuildableTrainPlatformCargo* self, AFGRailroadVehicle*, AFGBuildableRailroadStation* )
 		{
 			LogPlatformState( TEXT( "NotifyTrainDocked" ), self );
-			if ( !IsStandardPlatform( self ) )
+			if ( !IsSupportedPlatform(self ) )
 			{
 				return;
 			}
@@ -436,7 +485,7 @@ void FBFPHooks::RegisterHooks()
 				P.bLoadPass = false;
 				P.bTwoPass = true;
 				self->SetmIsInLoadMode( false );
-				UE_LOG( LogBFP, Display, TEXT( "Dock on %s: BOTH (unload-first)" ), *self->GetName() );
+				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: BOTH (unload-first)" ), *self->GetName() );
 				break;
 
 			case EBFPStationMode::Load:
@@ -445,7 +494,7 @@ void FBFPHooks::RegisterHooks()
 				P.bLoadPass = true;
 				P.bTwoPass = false;
 				self->SetmIsInLoadMode( true );
-				UE_LOG( LogBFP, Display, TEXT( "Dock on %s: LOAD only" ), *self->GetName() );
+				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: LOAD only" ), *self->GetName() );
 				break;
 
 			case EBFPStationMode::Unload:
@@ -454,7 +503,7 @@ void FBFPHooks::RegisterHooks()
 				P.bLoadPass = false;
 				P.bTwoPass = false;
 				self->SetmIsInLoadMode( false );
-				UE_LOG( LogBFP, Display, TEXT( "Dock on %s: UNLOAD only" ), *self->GetName() );
+				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: UNLOAD only" ), *self->GetName() );
 				break;
 			}
 		} );
