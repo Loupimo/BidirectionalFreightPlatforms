@@ -53,6 +53,19 @@ bool UBFPCargoPlatformComponent::NeedTransform_Implementation()
 	return false;
 }
 
+void UBFPCargoPlatformComponent::PublishTransferRates( float NewLoadRate, float NewUnloadRate )
+{
+	mLoadRate = NewLoadRate;
+	mUnloadRate = NewUnloadRate;
+	// Authority broadcasts locally (single-player / listen-server host); remote clients fire via OnRep.
+	OnTransferRateUpdated.Broadcast( mLoadRate, mUnloadRate );
+}
+
+void UBFPCargoPlatformComponent::OnRep_TransferRate()
+{
+	OnTransferRateUpdated.Broadcast( mLoadRate, mUnloadRate );
+}
+
 void UBFPCargoPlatformComponent::SetStationMode( EBFPStationMode Mode )
 {
 	mStationMode = Mode;

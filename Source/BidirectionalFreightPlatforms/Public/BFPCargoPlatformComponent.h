@@ -16,6 +16,9 @@ enum class EBFPStationMode : uint8
 	Both	UMETA( DisplayName = "Load + Unload (bidirectional)" )
 };
 
+/** Fired at train departure with the last stop's transfer rates (items/min). Bind from the station UI. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FBFPOnTransferRateUpdated, float, LoadRate, float, UnloadRate );
+
 /**
  * Saved + replicated marker component attached at runtime to a freight cargo platform. Holds the
  * per-platform "bidirectional" toggle (load AND unload the same wagon in one stop). Persisted by the
@@ -74,16 +77,22 @@ public:
 	/** Server: create the load buffer (cloning the vanilla inventory) if it does not exist yet. */
 	class UFGInventoryComponent* EnsureLoadInventory();
 
-	/** Current-stop wagon transfer rates (items/min), computed by our hooks. 0 between stops. */
+	/** Last finished stop's wagon transfer rates (items/min), held until the next train. */
 	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
 	float GetLoadRate() const { return mLoadRate; }
 
 	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
 	float GetUnloadRate() const { return mUnloadRate; }
 
-	/** Setters used by the native hooks (authority); the values replicate to clients for the UI. */
-	void SetLoadRate( float Rate ) { mLoadRate = Rate; }
-	void SetUnloadRate( float Rate ) { mUnloadRate = Rate; }
+	/**
+	 * Broadcast at train departure (whether or not anything was transferred -> 0 if nothing moved),
+	 * carrying the last stop's rates. Bind from the station UI for event-driven updates (no tick needed).
+	 */
+	UPROPERTY( BlueprintAssignable, Category = "BidirectionalFreightPlatforms" )
+	FBFPOnTransferRateUpdated OnTransferRateUpdated;
+
+	/** Authority: set both rates and fire OnTransferRateUpdated (called at undock by the hooks). */
+	void PublishTransferRates( float NewLoadRate, float NewUnloadRate );
 
 	/** Cached load buffer (also a registered component named "BFP_LoadInventory" on the owner). */
 	UPROPERTY()
@@ -97,11 +106,15 @@ public:
 	UPROPERTY( SaveGame, Replicated )
 	EBFPStationMode mStationMode;
 
-	/** Items/min loaded into the wagon for the current stop (transient, replicated, 0 between stops). */
-	UPROPERTY( Replicated )
+	/** Items/min loaded into the wagon at the last stop (replicated; held until the next train). */
+	UPROPERTY( ReplicatedUsing = OnRep_TransferRate )
 	float mLoadRate;
 
-	/** Items/min unloaded from the wagon for the current stop (transient, replicated, 0 between stops). */
-	UPROPERTY( Replicated )
+	/** Items/min unloaded from the wagon at the last stop (replicated; held until the next train). */
+	UPROPERTY( ReplicatedUsing = OnRep_TransferRate )
 	float mUnloadRate;
+
+	/** Client-side: fire OnTransferRateUpdated when a replicated rate arrives. */
+	UFUNCTION()
+	void OnRep_TransferRate();
 };

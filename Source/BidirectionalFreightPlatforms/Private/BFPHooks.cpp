@@ -227,45 +227,26 @@ namespace
 }
 
 /**
- * Compute the per-direction wagon transfer rate (items/min) for the current stop. Called every
- * Factory_Tick while docked. The game's own smoothed rate is unusable for us (it reads the inventory
- * through mCargoInventoryHandler, which our two-pass mInventory swaps confuse), so we derive it from
- * the docked wagon's freight count:
- *   - delta < 0 -> the wagon lost items -> UNLOAD; delta > 0 -> gained -> LOAD (attribution by sign).
- *   - rate = items moved this stop / the platform's configured (un)load time, which keeps the value
- *     believable even though the transfer can land in a single bulk step.
- * Resets to 0 when no wagon is docked (covers undock for both bidirectional and normal platforms).
+ * Accumulate the docked wagon's freight delta during a stop (called every Factory_Tick while docked).
+ * The game's own smoothed rate is unusable for us (it reads the inventory through mCargoInventoryHandler,
+ * which our two-pass mInventory swaps confuse), so we derive it from the wagon's freight count:
+ *   delta < 0 -> the wagon lost items -> UNLOAD; delta > 0 -> gained -> LOAD (attribution by sign).
+ * The component rates are NOT touched here: the station cannot be opened while a train is docked, so we
+ * publish the rate once at undock (FinalizeTransferRate) and keep it until the next stop.
  */
 void SampleWagonTransferRate( AFGBuildableTrainPlatformCargo* Platform, FBFPPlatform& P )
 {
-	UBFPCargoPlatformComponent* C = P.ToggleComp.Get();
-	if ( !C )
-	{
-		return;
-	}
-
 	AFGFreightWagon* Wagon = Cast<AFGFreightWagon>( Platform->GetDockedActor() );
 	UFGInventoryComponent* WInv = Wagon ? Wagon->GetFreightInventory() : nullptr;
-
 	if ( !WInv )
 	{
-		// No wagon docked: reset for the next stop and zero the rates (once).
-		if ( P.LastWagonCount != -1 || P.UnloadMoved != 0 || P.LoadMoved != 0 )
-		{
-			P.LastWagonCount = -1;
-			P.UnloadMoved = 0;
-			P.LoadMoved = 0;
-			C->SetUnloadRate( 0.f );
-			C->SetLoadRate( 0.f );
-		}
 		return;
 	}
 
 	const int32 Count = WInv->GetNumItems( nullptr );
 	if ( P.LastWagonCount < 0 )
 	{
-		// First sample of this stop: establish the baseline only.
-		P.LastWagonCount = Count;
+		P.LastWagonCount = Count; // baseline for this stop
 		return;
 	}
 
@@ -273,18 +254,26 @@ void SampleWagonTransferRate( AFGBuildableTrainPlatformCargo* Platform, FBFPPlat
 	if ( Delta < 0 )      { P.UnloadMoved += -Delta; }
 	else if ( Delta > 0 ) { P.LoadMoved   +=  Delta; }
 	P.LastWagonCount = Count;
+}
 
-	const float TU = Platform->GetmTimeToCompleteUnload();
-	const float TL = Platform->GetmTimeToCompleteLoad();
-	C->SetUnloadRate( TU > 0.f ? P.UnloadMoved / TU * 60.f : 0.f );
-	C->SetLoadRate(   TL > 0.f ? P.LoadMoved   / TL * 60.f : 0.f );
-
-	if ( Delta != 0 )
+/**
+ * Publish the just-finished stop's transfer rates (items/min) onto the component at undock, and keep
+ * them there until the next stop. The player can only open the station once the train has left, so this
+ * "last stop" value is the one they actually see. rate = items moved / configured (un)load time * 60.
+ */
+void FinalizeTransferRate( AFGBuildableTrainPlatformCargo* Platform, FBFPPlatform& P )
+{
+	if ( UBFPCargoPlatformComponent* C = P.ToggleComp.Get() )
 	{
-		UE_LOG( LogBFP, Verbose,
-			TEXT( "Rate %s: wagon=%d delta=%d unloadMoved=%d loadMoved=%d TU=%.1f TL=%.1f -> unload=%.1f load=%.1f /min" ),
-			*Platform->GetName(), Count, Delta, P.UnloadMoved, P.LoadMoved, TU, TL,
-			C->GetUnloadRate(), C->GetLoadRate() );
+		const float TU = Platform->GetmTimeToCompleteUnload();
+		const float TL = Platform->GetmTimeToCompleteLoad();
+		const float UnloadRate = TU > 0.f ? P.UnloadMoved / TU * 60.f : 0.f;
+		const float LoadRate   = TL > 0.f ? P.LoadMoved   / TL * 60.f : 0.f;
+		// Sets the (replicated) rates AND fires OnTransferRateUpdated for the UI to refresh on.
+		C->PublishTransferRates( LoadRate, UnloadRate );
+		UE_LOG( LogBFP, Display,
+			TEXT( "Rate FINALIZE %s: unloadMoved=%d loadMoved=%d -> unload=%.1f load=%.1f /min (event fired, held until next train)" ),
+			*Platform->GetName(), P.UnloadMoved, P.LoadMoved, UnloadRate, LoadRate );
 	}
 }
 
@@ -429,6 +418,11 @@ void FBFPHooks::RegisterHooks()
 			P.bDockActive = true;
 			P.bOriginalLoadMode = self->GetIsInLoadMode();
 
+			// Fresh transfer-rate accounting for this stop; published to the component at undock.
+			P.LastWagonCount = -1;
+			P.UnloadMoved = 0;
+			P.LoadMoved = 0;
+
 			switch ( Mode )
 			{
 			case EBFPStationMode::Both:
@@ -437,7 +431,7 @@ void FBFPHooks::RegisterHooks()
 				P.bLoadPass = false;
 				P.bTwoPass = true;
 				self->SetmIsInLoadMode( false );
-				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: BOTH (unload-first)" ), *self->GetName() );
+				UE_LOG( LogBFP, Display, TEXT( "Dock on %s: BOTH (unload-first)" ), *self->GetName() );
 				break;
 
 			case EBFPStationMode::Load:
@@ -446,7 +440,7 @@ void FBFPHooks::RegisterHooks()
 				P.bLoadPass = true;
 				P.bTwoPass = false;
 				self->SetmIsInLoadMode( true );
-				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: LOAD only" ), *self->GetName() );
+				UE_LOG( LogBFP, Display, TEXT( "Dock on %s: LOAD only" ), *self->GetName() );
 				break;
 
 			case EBFPStationMode::Unload:
@@ -455,7 +449,7 @@ void FBFPHooks::RegisterHooks()
 				P.bLoadPass = false;
 				P.bTwoPass = false;
 				self->SetmIsInLoadMode( false );
-				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: UNLOAD only" ), *self->GetName() );
+				UE_LOG( LogBFP, Display, TEXT( "Dock on %s: UNLOAD only" ), *self->GetName() );
 				break;
 			}
 		} );
@@ -497,13 +491,15 @@ void FBFPHooks::RegisterHooks()
 					self->SetmPlatformDockingStatus( ETrainPlatformDockingStatus::ETPDS_WaitingToStart );
 					UE_LOG( LogBFP, Verbose, TEXT( ">>> LOAD PASS on %s" ), *self->GetName() );
 				}
-				// Dock finished -> restore the configured mode and clear per-dock state.
+				// Dock finished -> restore the configured mode, publish the stop's rates, clear per-dock state.
 				else if ( Status == ETrainPlatformDockingStatus::ETPDS_None )
 				{
 					self->SetmIsInLoadMode( P->bOriginalLoadMode );
 					P->bDockActive = false;
 					P->bLoadPass = false;
 					P->bTwoPass = false;
+					// Train left: publish this stop's rates and keep them for the (now openable) station UI.
+					FinalizeTransferRate( self, *P );
 				}
 			}
 
@@ -528,6 +524,7 @@ void FBFPHooks::RegisterHooks()
 					P->bDockActive = false;
 					P->bLoadPass = false;
 					P->bTwoPass = false;
+					FinalizeTransferRate( self, *P );
 				}
 				if ( P->UnloadInventory.IsValid() )
 				{
