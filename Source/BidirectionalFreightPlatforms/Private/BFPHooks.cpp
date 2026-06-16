@@ -340,21 +340,16 @@ void FBFPHooks::RegisterHooks()
 				*self->GetName(), static_cast<const void*>( V ) );
 		} );
 
-	// Input redirection / blocking for solid platforms:
-	//  - Load / Both: point mInventory at the load buffer for the collect so input belts feed it.
-	//  - Unload only: the load side is OFF, so CANCEL the collect entirely — otherwise input belts would
-	//    feed mInventory and pass straight through to the output belts.
+	// Input redirection for solid platforms: ALWAYS route input belts into the load buffer (any mode) so
+	// they fill the station and never pass through mInventory to the output belts. In Unload-only the load
+	// buffer simply accumulates (visible in the UI, ready to load if loading is enabled) and the belt backs
+	// up when full. The mode only decides whether that load buffer is later loaded into the wagon.
 	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_CollectInput_Implementation,
-		[]( auto& scope, AFGBuildableTrainPlatformCargo* self )
+		[]( auto&, AFGBuildableTrainPlatformCargo* self )
 		{
 			if ( self->GetmFreightCargoType() != EFreightCargoType::FCT_Standard )
 			{
 				return; // not a solid platform: let vanilla run
-			}
-			if ( ResolveStationMode( self ) == EBFPStationMode::Unload )
-			{
-				scope.Cancel(); // unload-only: input belts are inert (no pass-through)
-				return;
 			}
 			FBFPPlatform& P = SetupPlatform( self );
 			if ( P.LoadInventory.IsValid() )
@@ -383,18 +378,13 @@ void FBFPHooks::RegisterHooks()
 		} );
 
 	// FLUID equivalent: liquid platforms pull input from pipes (Factory_PullPipeInput) instead of belts.
-	//  - Load / Both: redirect the pull into the load buffer.
-	//  - Unload only: cancel the pull so input pipes are inert (no fluid pass-through to the output).
+	// Same policy: ALWAYS route the pull into the load buffer (any mode) so it fills the station without
+	// passing through mInventory to the output pipes. Unload-only just accumulates in the load buffer.
 	SUBSCRIBE_UOBJECT_METHOD( AFGBuildableTrainPlatformCargo, Factory_PullPipeInput_Implementation,
-		[]( auto& scope, AFGBuildableTrainPlatformCargo* self, float )
+		[]( auto&, AFGBuildableTrainPlatformCargo* self, float )
 		{
 			if ( self->GetmFreightCargoType() != EFreightCargoType::FCT_Liquid )
 			{
-				return;
-			}
-			if ( ResolveStationMode( self ) == EBFPStationMode::Unload )
-			{
-				scope.Cancel(); // unload-only: input pipes are inert (no pass-through)
 				return;
 			}
 			FBFPPlatform& P = SetupPlatform( self );
