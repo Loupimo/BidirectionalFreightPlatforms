@@ -110,8 +110,9 @@ public:
 	void PublishTransferRates( float NewLoadRate, float NewUnloadRate );
 
 	/** The load buffer. REPLICATED so clients get the pointer directly — looking it up by name fails on
-	 *  clients (replicated components get generated names, not "BFP_LoadInventory"). */
-	UPROPERTY( Replicated )
+	 *  clients (replicated components get generated names, not "BFP_LoadInventory"). OnRep so the client can
+	 *  copy the vanilla inventory's (non-replicated) arbitrary slot size onto it for correct capacity display. */
+	UPROPERTY( ReplicatedUsing = OnRep_LoadInventory )
 	TObjectPtr<class UFGInventoryComponent> mLoadInventory;
 
 	/** True once the new-vs-loaded default has been resolved; saved so it is resolved only once. */
@@ -133,4 +134,11 @@ public:
 	/** Client-side: fire OnTransferRateUpdated when a replicated rate arrives. */
 	UFUNCTION()
 	void OnRep_TransferRate();
+
+	/** Client-side: when the load buffer arrives, copy the vanilla inventory's slot sizes onto it. */
+	UFUNCTION()
+	void OnRep_LoadInventory();
+
+	/** Copy each slot's effective size from the vanilla inventory onto the load buffer (fluid capacity). */
+	void ReconcileLoadBufferCapacity();
 };

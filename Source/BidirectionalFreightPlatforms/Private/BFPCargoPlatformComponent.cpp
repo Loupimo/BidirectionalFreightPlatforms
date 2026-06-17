@@ -157,5 +157,34 @@ UFGInventoryComponent* UBFPCargoPlatformComponent::EnsureLoadInventory()
 	}
 
 	mLoadInventory = L;
+	// Per-slot sizes (fluid platforms set a large ARBITRARY slot size that CopyFromOtherComponent does NOT
+	// clone, nor does it replicate). Runs on the server here; the client redoes it in OnRep_LoadInventory.
+	ReconcileLoadBufferCapacity();
 	return L;
+}
+
+void UBFPCargoPlatformComponent::OnRep_LoadInventory()
+{
+	// Client: the load buffer pointer just arrived; copy the vanilla inventory's slot sizes onto it so the
+	// fluid capacity displays correctly (the arbitrary slot size is not replicated).
+	ReconcileLoadBufferCapacity();
+}
+
+void UBFPCargoPlatformComponent::ReconcileLoadBufferCapacity()
+{
+	UFGInventoryComponent* L = mLoadInventory.Get();
+	UFGInventoryComponent* V = FindInvByName( GetOwner(), TEXT( "inventory" ) );
+	if ( !L || !V )
+	{
+		return;
+	}
+	const int32 Num = FMath::Min( L->GetSizeLinear(), V->GetSizeLinear() );
+	for ( int32 i = 0; i < Num; ++i )
+	{
+		const int32 VSize = V->GetSlotSize( i );
+		if ( L->GetSlotSize( i ) != VSize )
+		{
+			L->AddArbitrarySlotSize( i, VSize ); // copy the (un-cloned, un-replicated) arbitrary fluid capacity
+		}
+	}
 }

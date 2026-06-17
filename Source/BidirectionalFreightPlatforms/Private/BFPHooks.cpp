@@ -512,6 +512,9 @@ void FBFPHooks::RegisterHooks()
 				P.bLoadPass = false;
 				P.bTwoPass = true;
 				self->SetmIsInLoadMode( false );
+				// Cosmetic: match the cargo container visuals to the docked train up front, so the unload pass
+				// shows the right (e.g. fluid) container instead of a default solid one. (Friend access.)
+				self->MatchVisualsOfCargoContainerToTrain();
 				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: BOTH (unload-first)" ), *self->GetName() );
 				break;
 
@@ -570,6 +573,12 @@ void FBFPHooks::RegisterHooks()
 					P->bLoadPass = true;
 					self->SetmIsInLoadMode( true );
 					self->SetmPlatformDockingStatus( ETrainPlatformDockingStatus::ETPDS_WaitingToStart );
+					// Cosmetic: help the dock anim/visuals transition cleanly into the 2nd (load) pass and push
+					// the change to clients promptly (mitigates the laggy/cut 2nd-pass animation in MP).
+					// These are protected, reachable here via the Friend AccessTransformer (lambda in FBFPHooks).
+					self->ForceUpdateAnimInstance();
+					self->MatchVisualsOfCargoContainerToTrain();
+					self->ForceNetUpdate();
 					UE_LOG( LogBFP, Verbose, TEXT( ">>> LOAD PASS on %s" ), *self->GetName() );
 				}
 				// Dock finished -> restore the configured mode, publish the stop's rates, clear per-dock state.
