@@ -75,6 +75,8 @@ void UBFPCargoPlatformComponent::OnRep_TransferRate()
 
 void UBFPCargoPlatformComponent::SetStationMode( EBFPStationMode Mode )
 {
+	// Authority-side apply. In MP, clients route through UBFPInteractProxyComponent (a client cannot mutate
+	// a buildable directly), which calls this on the server; the result replicates back via mStationMode.
 	mStationMode = Mode;
 	bInitialized = 1;
 

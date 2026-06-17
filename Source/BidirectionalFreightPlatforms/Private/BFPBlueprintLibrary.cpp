@@ -12,6 +12,8 @@
 #include "FGPipeConnectionComponent.h"
 #include "Buildables/FGBuildablePipeline.h"
 #include "FGPipeSubsystem.h"
+#include "BFPInteractProxyComponent.h"
+#include "GameFramework/Pawn.h"
 
 TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::StationInteractWidgetClass = nullptr;
 TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::FluidStationInteractWidgetClass = nullptr;
@@ -39,7 +41,16 @@ TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::GetFluidStationInteractWi
 UFGInventoryComponent* UBFPBlueprintLibrary::GetUnloadInventory( AFGBuildableTrainPlatformCargo* Platform )
 {
 	// The vanilla inventory is our unload buffer; it always rests here between ticks.
-	return Platform ? Platform->GetInventory() : nullptr;
+	UFGInventoryComponent* Inv = Platform ? Platform->GetInventory() : nullptr;
+	if ( Platform )
+	{
+		// DIAGNOSTIC (MP): is the vanilla inventory replicated to the client, and does its content reach us?
+		UE_LOG( LogBFP, Display, TEXT( "[BFP] GetUnloadInventory on %s: hasAuthority=%d unloadBuf=%s items=%d size=%d" ),
+			*Platform->GetName(), Platform->HasAuthority() ? 1 : 0,
+			Inv ? TEXT( "FOUND" ) : TEXT( "NULL" ),
+			Inv ? Inv->GetNumItems( nullptr ) : -1, Inv ? Inv->GetSizeLinear() : -1 );
+	}
+	return Inv;
 }
 
 UFGInventoryComponent* UBFPBlueprintLibrary::GetLoadInventory( AFGBuildableTrainPlatformCargo* Platform )
@@ -194,4 +205,9 @@ void UBFPBlueprintLibrary::FlushStationPipes( AFGBuildableTrainPlatformCargo* Pl
 			Subsystem->FlushPipeNetworkFromIntegrant( Integrant );
 		}
 	}
+}
+
+UBFPInteractProxyComponent* UBFPBlueprintLibrary::GetInteractProxy( APawn* PlayerPawn )
+{
+	return PlayerPawn ? PlayerPawn->FindComponentByClass<UBFPInteractProxyComponent>() : nullptr;
 }

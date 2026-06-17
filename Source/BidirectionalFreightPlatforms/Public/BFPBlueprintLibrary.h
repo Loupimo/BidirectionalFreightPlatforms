@@ -10,6 +10,8 @@
 class AFGBuildableTrainPlatformCargo;
 class UFGInventoryComponent;
 class UFGItemDescriptor;
+class UBFPInteractProxyComponent;
+class APawn;
 
 /**
  * Small library to feed mod-wide settings from Blueprint (e.g. your GameInstance / GameWorld module)
@@ -100,6 +102,13 @@ public:
 	 */
 	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms|Fluid" )
 	static void FlushStationPipes( AFGBuildableTrainPlatformCargo* Platform, bool bInput );
+
+	/**
+	 * The client->server action relay on the player character. Use it from the station UI to change the
+	 * mode or flush in multiplayer (a client cannot mutate a buildable directly). Pass GetOwningPlayerPawn.
+	 */
+	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
+	static UBFPInteractProxyComponent* GetInteractProxy( APawn* PlayerPawn );
 
 private:
 	static TSoftClassPtr<UFGInteractWidget> StationInteractWidgetClass;

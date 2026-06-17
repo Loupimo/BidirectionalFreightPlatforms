@@ -11,6 +11,8 @@
 
 #include "BFPCargoPlatformComponent.h"
 #include "BFPBlueprintLibrary.h"
+#include "BFPInteractProxyComponent.h"
+#include "FGCharacterPlayer.h"
 
 #include "Patching/NativeHookManager.h"
 
@@ -296,6 +298,25 @@ void FBFPHooks::RegisterHooks()
 {
 	UE_LOG( LogBFP, Display, TEXT( "BidirectionalFreightPlatforms: registering hooks (transient-swap, save-safe)" ) );
 
+	// Attach the client->server action relay to each player character. Created on the server (authority);
+	// it replicates to the owning client, which fires its Server RPCs from it (the client owns its
+	// character, so those route — unlike RPCs on a buildable the client does not own).
+	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGCharacterPlayer, BeginPlay,
+		[]( AFGCharacterPlayer* self )
+		{
+			if ( !self || !self->HasAuthority() )
+			{
+				return;
+			}
+			if ( !self->FindComponentByClass<UBFPInteractProxyComponent>() )
+			{
+				if ( UBFPInteractProxyComponent* Proxy = NewObject<UBFPInteractProxyComponent>( self, TEXT( "BFP_InteractProxy" ) ) )
+				{
+					Proxy->RegisterComponent();
+				}
+			}
+		} );
+
 // On spawn: resolve the two buffers and make sure mInventory rests on the unload buffer (this also
 	// cleans up any save that was written by an older build while mInventory pointed at the load buffer).
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, BeginPlay,
@@ -316,6 +337,14 @@ void FBFPHooks::RegisterHooks()
 			}
 			FBFPPlatform& P = GPlatforms.FindOrAdd( self );
 			P.UnloadInventory = V;
+
+				// MP: force the vanilla unload inventory to replicate its contents to ALL clients. SF only
+				// replicates it to registered interacting players (server-side via OnUse), which our custom
+				// widget can't trigger reliably; this mirrors how we replicate the load buffer. Server only.
+				if ( V && self->HasAuthority() )
+				{
+					V->SetIsReplicated( true );
+				}
 
 			if ( V && self->GetInventory() != V )
 			{
