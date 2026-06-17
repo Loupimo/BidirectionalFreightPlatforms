@@ -5,7 +5,22 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "FGSaveInterface.h"
+#include "FGInventoryComponent.h"
 #include "BFPCargoPlatformComponent.generated.h"
+
+/**
+ * The LOAD buffer inventory. A dedicated subclass so it can set replication in its CONSTRUCTOR
+ * (SetIsReplicatedByDefault) — calling SetIsReplicated() at runtime on a plain UFGInventoryComponent did
+ * NOT reliably replicate the buffer to clients in MP, while the toggle component (which uses the ctor flag)
+ * does replicate. Same pattern here so the load panel shows up on clients.
+ */
+UCLASS()
+class BIDIRECTIONALFREIGHTPLATFORMS_API UBFPLoadInventoryComponent : public UFGInventoryComponent
+{
+	GENERATED_BODY()
+public:
+	UBFPLoadInventoryComponent();
+};
 
 /** What a freight platform does for a docked wagon. */
 UENUM( BlueprintType )
@@ -94,8 +109,9 @@ public:
 	/** Authority: set both rates and fire OnTransferRateUpdated (called at undock by the hooks). */
 	void PublishTransferRates( float NewLoadRate, float NewUnloadRate );
 
-	/** Cached load buffer (also a registered component named "BFP_LoadInventory" on the owner). */
-	UPROPERTY()
+	/** The load buffer. REPLICATED so clients get the pointer directly — looking it up by name fails on
+	 *  clients (replicated components get generated names, not "BFP_LoadInventory"). */
+	UPROPERTY( Replicated )
 	TObjectPtr<class UFGInventoryComponent> mLoadInventory;
 
 	/** True once the new-vs-loaded default has been resolved; saved so it is resolved only once. */

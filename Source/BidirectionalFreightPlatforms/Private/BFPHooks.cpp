@@ -102,12 +102,21 @@ namespace
 		if ( !P.ToggleComp.IsValid() )
 		{
 			UBFPCargoPlatformComponent* C = Platform->FindComponentByClass<UBFPCargoPlatformComponent>();
-			if ( !C )
+			// Authority only: the server creates it and it replicates to clients. A client must NOT create a
+			// local duplicate — it would shadow the replicated one and read default mode/rates. On a client
+			// that has not received the replicated component yet, C stays null until it arrives.
+			if ( !C && Platform->HasAuthority() )
 			{
 				C = NewObject<UBFPCargoPlatformComponent>( Platform, TEXT( "BFP_ToggleComponent" ) );
 				if ( C )
 				{
+					C->SetIsReplicated( true );
 					C->RegisterComponent();
+					// SF buildables go net-dormant once placed, so runtime-added components and their
+					// replicated state never reach clients. Keep the platform awake so our component, the
+					// load buffer, and the replicated mode/rates actually replicate. DORM_Never (not just
+					// DORM_Awake) so SF can't put it back to sleep.
+					Platform->SetNetDormancy( DORM_Never );
 				}
 			}
 			P.ToggleComp = C;
@@ -124,7 +133,8 @@ namespace
 	 */
 	void ResolveStationModeOnBeginPlay( AFGBuildableTrainPlatformCargo* Platform, UBFPCargoPlatformComponent* C )
 	{
-		if ( !C || C->bInitialized )
+		// Authority only: the mode is replicated, so a client must never resolve/overwrite it locally.
+		if ( !C || C->bInitialized || !Platform || !Platform->HasAuthority() )
 		{
 			return;
 		}
@@ -320,7 +330,10 @@ void FBFPHooks::RegisterHooks()
 			if ( UBFPCargoPlatformComponent* C = EnsureToggleComponent( self ) )
 			{
 				ResolveStationModeOnBeginPlay( self, C );
-			}
+					// Create the load buffer early (server) so it is part of the platform's INITIAL
+					// replication; a component added later may not reach clients.
+					C->EnsureLoadInventory();
+				}
 
 			// Optional: point the platform's interact widget at our custom widget (replaces the station UI).
 			// Solid and fluid use SEPARATE widget classes (item grids vs tanks/gauges), both configured from

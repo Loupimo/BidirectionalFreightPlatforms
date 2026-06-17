@@ -2,6 +2,7 @@
 
 #include "BFPBlueprintLibrary.h"
 
+#include "BFPHooks.h" // LogBFP category
 #include "Buildables/FGBuildableTrainPlatformCargo.h"
 #include "FGInventoryComponent.h"
 #include "BFPCargoPlatformComponent.h"
@@ -49,18 +50,19 @@ UFGInventoryComponent* UBFPBlueprintLibrary::GetLoadInventory( AFGBuildableTrain
 	}
 
 	UBFPCargoPlatformComponent* Comp = Platform->FindComponentByClass<UBFPCargoPlatformComponent>();
-	if ( !Comp )
-	{
-		return nullptr;
-	}
-
-	UFGInventoryComponent* Inv = Comp->GetLoadInventory();
-	if ( !Inv )
+	UFGInventoryComponent* Inv = Comp ? Comp->GetLoadInventory() : nullptr;
+	if ( !Inv && Comp )
 	{
 		// Server / single-player: lazily create so the UI always has something to show.
 		// No-op (returns null) on clients, which receive it via replication instead.
 		Inv = Comp->EnsureLoadInventory();
 	}
+
+	// DIAGNOSTIC (MP): when null, pinpoint whether the toggle COMPONENT failed to replicate to the client
+	// (toggleComp=NULL) or only the load buffer did (toggleComp=FOUND). hasAuthority=0 means we are a client.
+	UE_LOG( LogBFP, Display, TEXT( "[BFP] GetLoadInventory on %s: hasAuthority=%d toggleComp=%s loadBuf=%s" ),
+		*Platform->GetName(), Platform->HasAuthority() ? 1 : 0,
+		Comp ? TEXT( "FOUND" ) : TEXT( "NULL" ), Inv ? TEXT( "FOUND" ) : TEXT( "NULL" ) );
 	return Inv;
 }
 

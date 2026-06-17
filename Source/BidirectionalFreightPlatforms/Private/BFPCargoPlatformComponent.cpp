@@ -4,6 +4,12 @@
 #include "FGInventoryComponent.h"
 #include "Net/UnrealNetwork.h"
 
+UBFPLoadInventoryComponent::UBFPLoadInventoryComponent()
+{
+	// Replicate from the constructor (the reliable path) so the load buffer reaches clients in MP.
+	SetIsReplicatedByDefault( true );
+}
+
 namespace
 {
 	UFGInventoryComponent* FindInvByName( const AActor* Actor, const TCHAR* Name )
@@ -41,6 +47,7 @@ void UBFPCargoPlatformComponent::GetLifetimeReplicatedProps( TArray<FLifetimePro
 	DOREPLIFETIME( UBFPCargoPlatformComponent, mStationMode );
 	DOREPLIFETIME( UBFPCargoPlatformComponent, mLoadRate );
 	DOREPLIFETIME( UBFPCargoPlatformComponent, mUnloadRate );
+	DOREPLIFETIME( UBFPCargoPlatformComponent, mLoadInventory );
 }
 
 bool UBFPCargoPlatformComponent::ShouldSave_Implementation() const
@@ -98,7 +105,9 @@ UFGInventoryComponent* UBFPCargoPlatformComponent::GetLoadInventory() const
 	{
 		return mLoadInventory;
 	}
-	return FindInvByName( GetOwner(), TEXT( "BFP_LoadInventory" ) );
+	// Client-safe fallback: find by CLASS, not name. Replicated components get generated names on clients,
+	// so FindInvByName("BFP_LoadInventory") would fail there.
+	return GetOwner() ? GetOwner()->FindComponentByClass<UBFPLoadInventoryComponent>() : nullptr;
 }
 
 UFGInventoryComponent* UBFPCargoPlatformComponent::EnsureLoadInventory()
@@ -111,10 +120,10 @@ UFGInventoryComponent* UBFPCargoPlatformComponent::EnsureLoadInventory()
 	// Only the authority creates the component; clients pick up the replicated one by name.
 	if ( !L && Owner && Owner->HasAuthority() )
 	{
-		L = NewObject<UFGInventoryComponent>( Owner, TEXT( "BFP_LoadInventory" ) );
+		L = NewObject<UBFPLoadInventoryComponent>( Owner, TEXT( "BFP_LoadInventory" ) );
 		if ( L )
 		{
-			L->RegisterComponent();
+			L->RegisterComponent(); // replication flag is set in UBFPLoadInventoryComponent's constructor
 			if ( V )
 			{
 				// Clone capacity / slot sizes / filters. CopyFromOtherComponent ALSO copies the items, so for
