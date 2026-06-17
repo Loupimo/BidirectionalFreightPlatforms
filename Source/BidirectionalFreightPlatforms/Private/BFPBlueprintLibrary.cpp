@@ -45,7 +45,7 @@ UFGInventoryComponent* UBFPBlueprintLibrary::GetUnloadInventory( AFGBuildableTra
 	if ( Platform )
 	{
 		// DIAGNOSTIC (MP): is the vanilla inventory replicated to the client, and does its content reach us?
-		UE_LOG( LogBFP, Display, TEXT( "[BFP] GetUnloadInventory on %s: hasAuthority=%d unloadBuf=%s items=%d size=%d" ),
+		UE_LOG( LogBFP, Verbose, TEXT( "[BFP] GetUnloadInventory on %s: hasAuthority=%d unloadBuf=%s items=%d size=%d" ),
 			*Platform->GetName(), Platform->HasAuthority() ? 1 : 0,
 			Inv ? TEXT( "FOUND" ) : TEXT( "NULL" ),
 			Inv ? Inv->GetNumItems( nullptr ) : -1, Inv ? Inv->GetSizeLinear() : -1 );
@@ -71,7 +71,7 @@ UFGInventoryComponent* UBFPBlueprintLibrary::GetLoadInventory( AFGBuildableTrain
 
 	// DIAGNOSTIC (MP): when null, pinpoint whether the toggle COMPONENT failed to replicate to the client
 	// (toggleComp=NULL) or only the load buffer did (toggleComp=FOUND). hasAuthority=0 means we are a client.
-	UE_LOG( LogBFP, Display, TEXT( "[BFP] GetLoadInventory on %s: hasAuthority=%d toggleComp=%s loadBuf=%s" ),
+	UE_LOG( LogBFP, Verbose, TEXT( "[BFP] GetLoadInventory on %s: hasAuthority=%d toggleComp=%s loadBuf=%s" ),
 		*Platform->GetName(), Platform->HasAuthority() ? 1 : 0,
 		Comp ? TEXT( "FOUND" ) : TEXT( "NULL" ), Inv ? TEXT( "FOUND" ) : TEXT( "NULL" ) );
 	return Inv;

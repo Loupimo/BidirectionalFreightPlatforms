@@ -178,13 +178,17 @@ void UBFPCargoPlatformComponent::ReconcileLoadBufferCapacity()
 	{
 		return;
 	}
-	const int32 Num = FMath::Min( L->GetSizeLinear(), V->GetSizeLinear() );
+	// Read the vanilla inventory's arbitrary slot sizes DIRECTLY (the array is indexed by slot; an entry of 0
+	// means "no arbitrary size, use the item's stack size"). This avoids GetSlotSize(), which logs
+	// "Can't find a slot size!" for every empty/no-arbitrary slot -> on solid platforms (no arbitrary sizes
+	// at all) that warning fires for every slot of both inventories and floods the server log at startup.
+	const TArray<int32>& Arb = V->GetmArbitrarySlotSizes();
+	const int32 Num = FMath::Min( L->GetSizeLinear(), Arb.Num() );
 	for ( int32 i = 0; i < Num; ++i )
 	{
-		const int32 VSize = V->GetSlotSize( i );
-		if ( L->GetSlotSize( i ) != VSize )
+		if ( Arb[i] > 0 )
 		{
-			L->AddArbitrarySlotSize( i, VSize ); // copy the (un-cloned, un-replicated) arbitrary fluid capacity
+			L->AddArbitrarySlotSize( i, Arb[i] ); // copy the (un-cloned, un-replicated) arbitrary fluid capacity
 		}
 	}
 }

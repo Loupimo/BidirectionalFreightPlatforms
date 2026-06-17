@@ -85,7 +85,7 @@ namespace
 
 	TMap<TWeakObjectPtr<AFGBuildableTrainPlatformCargo>, FBFPPlatform> GPlatforms;
 
-	/** Solid (FCT_Standard) or fluid (FCT_Liquid) cargo platform — both use the same two-pass machinery
+	/** Solid (FCT_Standard) or fluid (FCT_Liquid) cargo platform ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â both use the same two-pass machinery
 	 *  (only the input-redirect hook differs: belts use Factory_CollectInput, pipes use Factory_PullPipeInput). */
 	bool IsSupportedPlatform( AFGBuildableTrainPlatformCargo* Platform )
 	{
@@ -105,7 +105,7 @@ namespace
 		{
 			UBFPCargoPlatformComponent* C = Platform->FindComponentByClass<UBFPCargoPlatformComponent>();
 			// Authority only: the server creates it and it replicates to clients. A client must NOT create a
-			// local duplicate — it would shadow the replicated one and read default mode/rates. On a client
+			// local duplicate ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â it would shadow the replicated one and read default mode/rates. On a client
 			// that has not received the replicated component yet, C stays null until it arrives.
 			if ( !C && Platform->HasAuthority() )
 			{
@@ -300,7 +300,7 @@ void FBFPHooks::RegisterHooks()
 
 	// Attach the client->server action relay to each player character. Created on the server (authority);
 	// it replicates to the owning client, which fires its Server RPCs from it (the client owns its
-	// character, so those route — unlike RPCs on a buildable the client does not own).
+	// character, so those route ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â unlike RPCs on a buildable the client does not own).
 	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGCharacterPlayer, BeginPlay,
 		[]( AFGCharacterPlayer* self )
 		{
@@ -512,9 +512,6 @@ void FBFPHooks::RegisterHooks()
 				P.bLoadPass = false;
 				P.bTwoPass = true;
 				self->SetmIsInLoadMode( false );
-				// Cosmetic: match the cargo container visuals to the docked train up front, so the unload pass
-				// shows the right (e.g. fluid) container instead of a default solid one. (Friend access.)
-				self->MatchVisualsOfCargoContainerToTrain();
 				UE_LOG( LogBFP, Verbose, TEXT( "Dock on %s: BOTH (unload-first)" ), *self->GetName() );
 				break;
 
@@ -543,10 +540,18 @@ void FBFPHooks::RegisterHooks()
 		[]( auto&, AFGBuildableTrainPlatformCargo* self )
 		{
 			FBFPPlatform* P = GPlatforms.Find( self );
-			if ( P && P->bLoadPass && P->LoadInventory.IsValid() )
+			if ( P && P->bLoadPass )
 			{
-				P->SeqSaved = self->GetInventory();
-				self->SetmInventory( P->LoadInventory.Get() );
+				// Keep IsFullUnload=0 for the whole injected load pass. It is still 1 from the finished unload pass,
+				// and the dock anim BP (FGAnimInstanceTrainDocking reads IsFullLoad/IsFullUnload) breaks on the client
+				// when BOTH are set (wrong transition -> lag, container teleport, wagon type flip). A vanilla load has
+				// IsFullUnload=0; forcing it here makes our load pass look identical to a normal load. (Solo unaffected.)
+				self->SetmIsFullUnload( false );
+				if ( P->LoadInventory.IsValid() )
+				{
+					P->SeqSaved = self->GetInventory();
+					self->SetmInventory( P->LoadInventory.Get() );
+				}
 			}
 		} );
 
@@ -573,11 +578,9 @@ void FBFPHooks::RegisterHooks()
 					P->bLoadPass = true;
 					self->SetmIsInLoadMode( true );
 					self->SetmPlatformDockingStatus( ETrainPlatformDockingStatus::ETPDS_WaitingToStart );
-					// Cosmetic: help the dock anim/visuals transition cleanly into the 2nd (load) pass and push
-					// the change to clients promptly (mitigates the laggy/cut 2nd-pass animation in MP).
-					// These are protected, reachable here via the Friend AccessTransformer (lambda in FBFPHooks).
-					self->ForceUpdateAnimInstance();
-					self->MatchVisualsOfCargoContainerToTrain();
+					// Clear the stale unload flag right away (the per-tick BEFORE hook maintains it through the pass) and
+					// push the rewind to clients promptly so the load anim starts clean and without extra delay.
+					self->SetmIsFullUnload( false );
 					self->ForceNetUpdate();
 					UE_LOG( LogBFP, Verbose, TEXT( ">>> LOAD PASS on %s" ), *self->GetName() );
 				}
@@ -620,6 +623,26 @@ void FBFPHooks::RegisterHooks()
 				{
 					self->SetmInventory( P->UnloadInventory.Get() );
 				}
+			}
+		} );
+
+	// Client-side visual driver (remote clients only). The client receives every docking-status transition, so
+	// vanilla OnRep_UpdateDockingStatus already drives the dock animation; we only re-match the CONTAINER TYPE to
+	// the docked train at the start of an active transfer pass (so e.g. a fluid platform shows the fluid container,
+	// not a default solid one). We deliberately do NOT call ForceUpdateAnimInstance (it snaps the in-progress anim
+	// to its end -> the container 'teleports') and do NOT re-match at Complete/None (it flipped the wagon type at
+	// undock). (Private fn reached via the Friend AccessTransformer.)
+	SUBSCRIBE_UOBJECT_METHOD_AFTER( AFGBuildableTrainPlatformCargo, OnRep_UpdateDockingStatus,
+		[]( AFGBuildableTrainPlatformCargo* self )
+		{
+			if ( !IsSupportedPlatform( self ) || self->HasAuthority() )
+			{
+				return; // authority drives visuals through the normal code path; this is for remote clients
+			}
+			const ETrainPlatformDockingStatus Status = self->GetDockingStatus();
+			if ( Status == ETrainPlatformDockingStatus::ETPDS_Loading || Status == ETrainPlatformDockingStatus::ETPDS_Unloading )
+			{
+				self->MatchVisualsOfCargoContainerToTrain();
 			}
 		} );
 }
