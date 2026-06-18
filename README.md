@@ -1,6 +1,6 @@
 # Overview
 
-Universal Freight Platform enhances freight platforms by allowing them to **load and unload the same train car from a single platform**.
+Bidirectional Freight Platform enhances freight platforms by allowing them to **load and unload the same train car from a single platform**.
 
 In vanilla Satisfactory, a freight platform must be configured either as **Load** or **Unload**. This mod removes that limitation by allowing both modes to be enabled simultaneously, making train logistics more flexible and reducing the number of platforms required in many setups.
 
@@ -77,6 +77,19 @@ unless train filters prevent one of these actions.
 For this reason, it is recommended to review your train schedules and platform filters when introducing bidirectional platforms into an existing logistics network.
 
 ![Freight UI](https://github.com/Loupimo/BidirectionalFreightPlatforms/blob/main/Resources/Train_Demo.gif?raw=true)
+
+# Q/A
+
+**Is this mod multiplayer compatible ?**
+
+This mod has been tested on a selfhosted windows server and dedicated server. I have also compiled the mod for Linux but I have no mean to test it so use it at your own risk (if you want to help me with that you can open a ticket).
+
+Also, in multiplayer you may encounter some visual artifacts, like cargo type switching from fluid to solid, or cargo teleport during the 2nd pass animation. I have tried to fix it but wasn't able to do so. This is a known limitation and is mainly due to how the game play the animation in vanilla game (this can happen in the vanilla game if you cut the power while the animation is playing).
+
+**What happen if I unistall the mod on a save where some stations had biderectionnal mode activated ?**
+
+The bidirectionnal stations will be set to "Unload" mode. Stations on "Load" mode will stay on "Load" and "Unload" on "Unload".</br>
+Note that all content placed in the "Load" inventory will be lost no matter the station mode.
 
 # Support
 For questions or support, contact:
