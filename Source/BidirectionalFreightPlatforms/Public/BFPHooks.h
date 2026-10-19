@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 
-DECLARE_LOG_CATEGORY_EXTERN( LogBFP, Log, All );
+DECLARE_LOG_CATEGORY_EXTERN(LogBFP, Log, All);
 
 /**
  * Phase 0 instrumentation.

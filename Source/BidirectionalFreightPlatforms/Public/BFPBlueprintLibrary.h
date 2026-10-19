@@ -28,8 +28,8 @@ public:
 	 * Call this once at startup from your module (expose an EditDefaultsOnly TSoftClassPtr<UFGInteractWidget>
 	 * on the module and pass it here). Leave unset to keep the vanilla UI.
 	 */
-	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms" )
-	static void SetStationInteractWidgetClass( TSoftClassPtr<UFGInteractWidget> WidgetClass );
+	UFUNCTION(BlueprintCallable, Category = "BidirectionalFreightPlatforms")
+	static void SetStationInteractWidgetClass(TSoftClassPtr<UFGInteractWidget> WidgetClass);
 
 	/** The configured SOLID station UI widget class (null = keep vanilla). Read by the native hooks. */
 	static TSoftClassPtr<UFGInteractWidget> GetStationInteractWidgetClass();
@@ -38,8 +38,8 @@ public:
 	 * Set the widget class that replaces the FLUID (liquid) freight platform station UI. Same idea as the
 	 * solid one but a separate widget, because fluid inventories display as tanks/gauges, not item grids.
 	 */
-	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms" )
-	static void SetFluidStationInteractWidgetClass( TSoftClassPtr<UFGInteractWidget> WidgetClass );
+	UFUNCTION(BlueprintCallable, Category = "BidirectionalFreightPlatforms")
+	static void SetFluidStationInteractWidgetClass(TSoftClassPtr<UFGInteractWidget> WidgetClass);
 
 	/** The configured FLUID station UI widget class (null = keep vanilla). Read by the native hooks. */
 	static TSoftClassPtr<UFGInteractWidget> GetFluidStationInteractWidgetClass();
@@ -48,67 +48,67 @@ public:
 	 * UNLOAD buffer (wagon -> output belts) = the vanilla inventory. This is the "outgoing" panel.
 	 * Always rests on the unload buffer between ticks, so it is safe to read from the UI.
 	 */
-	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
-	static UFGInventoryComponent* GetUnloadInventory( AFGBuildableTrainPlatformCargo* Platform );
+	UFUNCTION(BlueprintPure, Category = "BidirectionalFreightPlatforms")
+	static UFGInventoryComponent* GetUnloadInventory(AFGBuildableTrainPlatformCargo* Platform);
 
 	/**
 	 * LOAD buffer (input belts -> wagon) = our modded inventory. This is the "incoming" panel.
 	 * Resolved from the BFP component; created on demand on the server / single-player.
 	 */
-	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
-	static UFGInventoryComponent* GetLoadInventory( AFGBuildableTrainPlatformCargo* Platform );
+	UFUNCTION(BlueprintPure, Category = "BidirectionalFreightPlatforms")
+	static UFGInventoryComponent* GetLoadInventory(AFGBuildableTrainPlatformCargo* Platform);
 
 	/**
 	 * Smoothed LOAD transfer rate (items/min, input belts -> wagon). Maintained & replicated by the
 	 * game; correctly attributed because our two-pass dock sets mIsInLoadMode during the load pass.
 	 * Poll this from the widget (e.g. OnCustomTick / a ~0.5-1s timer).
 	 */
-	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
-	static float GetLoadItemTransferRate( AFGBuildableTrainPlatformCargo* Platform );
+	UFUNCTION(BlueprintPure, Category = "BidirectionalFreightPlatforms")
+	static float GetLoadItemTransferRate(AFGBuildableTrainPlatformCargo* Platform);
 
 	/** Smoothed UNLOAD transfer rate (items/min, wagon -> output belts). See GetLoadItemTransferRate. */
-	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
-	static float GetUnloadItemTransferRate( AFGBuildableTrainPlatformCargo* Platform );
+	UFUNCTION(BlueprintPure, Category = "BidirectionalFreightPlatforms")
+	static float GetUnloadItemTransferRate(AFGBuildableTrainPlatformCargo* Platform);
 
 	/**
 	 * Close this station UI exactly like the Escape key does: pops the interact widget off the
 	 * GameUI stack and restores game input + camera. Call from your close (X) button.
 	 * Works on the top of the stack, so it does not matter which sub-widget calls it.
 	 */
-	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms" )
-	static void CloseStationUI( UFGInteractWidget* Widget );
+	UFUNCTION(BlueprintCallable, Category = "BidirectionalFreightPlatforms")
+	static void CloseStationUI(UFGInteractWidget* Widget);
 
 	// ---- Fluid helpers (for the liquid station UI) ----
 
 	/** Current fluid amount in this buffer, in m³ (the inventory stores fluids as 1 m³ = 1000 units). */
-	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid" )
-	static float GetFluidAmountM3( UFGInventoryComponent* Inventory );
+	UFUNCTION(BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid")
+	static float GetFluidAmountM3(UFGInventoryComponent* Inventory);
 
 	/** Fluid capacity of this buffer (slot 0), in m³. */
-	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid" )
-	static float GetFluidCapacityM3( UFGInventoryComponent* Inventory );
+	UFUNCTION(BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid")
+	static float GetFluidCapacityM3(UFGInventoryComponent* Inventory);
 
 	/** The fluid currently in this buffer; falls back to the slot's configured type when empty (null if neither). */
-	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid" )
-	static TSubclassOf<UFGItemDescriptor> GetFluidClass( UFGInventoryComponent* Inventory );
+	UFUNCTION(BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid")
+	static TSubclassOf<UFGItemDescriptor> GetFluidClass(UFGInventoryComponent* Inventory);
 
 	/** Max flow rate of the best pipe connected to the platform (same unit as Get In/OutflowRate). 0 if none. */
-	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid" )
-	static float GetMaxPipeFlowRate( AFGBuildableTrainPlatformCargo* Platform );
+	UFUNCTION(BlueprintPure, Category = "BidirectionalFreightPlatforms|Fluid")
+	static float GetMaxPipeFlowRate(AFGBuildableTrainPlatformCargo* Platform);
 
 	/**
 	 * Flush (empty + clear fluid type) the pipe network connected to the platform's INPUT side
 	 * (bInput = true) or OUTPUT side (bInput = false). Call from your flush button's event.
 	 */
-	UFUNCTION( BlueprintCallable, Category = "BidirectionalFreightPlatforms|Fluid" )
-	static void FlushStationPipes( AFGBuildableTrainPlatformCargo* Platform, bool bInput );
+	UFUNCTION(BlueprintCallable, Category = "BidirectionalFreightPlatforms|Fluid")
+	static void FlushStationPipes(AFGBuildableTrainPlatformCargo* Platform, bool bInput);
 
 	/**
 	 * The client->server action relay on the player character. Use it from the station UI to change the
 	 * mode or flush in multiplayer (a client cannot mutate a buildable directly). Pass GetOwningPlayerPawn.
 	 */
-	UFUNCTION( BlueprintPure, Category = "BidirectionalFreightPlatforms" )
-	static UBFPInteractProxyComponent* GetInteractProxy( APawn* PlayerPawn );
+	UFUNCTION(BlueprintPure, Category = "BidirectionalFreightPlatforms")
+	static UBFPInteractProxyComponent* GetInteractProxy(APawn* PlayerPawn);
 
 private:
 	static TSoftClassPtr<UFGInteractWidget> StationInteractWidgetClass;

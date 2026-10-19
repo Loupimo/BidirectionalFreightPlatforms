@@ -7,22 +7,22 @@
 UBFPLoadInventoryComponent::UBFPLoadInventoryComponent()
 {
 	// Replicate from the constructor (the reliable path) so the load buffer reaches clients in MP.
-	SetIsReplicatedByDefault( true );
+	SetIsReplicatedByDefault(true);
 }
 
 namespace
 {
-	UFGInventoryComponent* FindInvByName( const AActor* Actor, const TCHAR* Name )
+	UFGInventoryComponent* FindInvByName(const AActor* Actor, const TCHAR* Name)
 	{
-		if ( !Actor )
+		if (!Actor)
 		{
 			return nullptr;
 		}
 		TInlineComponentArray<UFGInventoryComponent*> Comps;
-		Actor->GetComponents( Comps );
-		for ( UFGInventoryComponent* C : Comps )
+		Actor->GetComponents(Comps);
+		for (UFGInventoryComponent* C : Comps)
 		{
-			if ( C && C->GetName() == Name )
+			if (C && C->GetName() == Name)
 			{
 				return C;
 			}
@@ -34,20 +34,20 @@ namespace
 UBFPCargoPlatformComponent::UBFPCargoPlatformComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
-	SetIsReplicatedByDefault( true );
+	SetIsReplicatedByDefault(true);
 	bInitialized = 0;
 	mStationMode = EBFPStationMode::Both;
 	mLoadRate = 0.f;
 	mUnloadRate = 0.f;
 }
 
-void UBFPCargoPlatformComponent::GetLifetimeReplicatedProps( TArray<FLifetimeProperty>& OutLifetimeProps ) const
+void UBFPCargoPlatformComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
-	Super::GetLifetimeReplicatedProps( OutLifetimeProps );
-	DOREPLIFETIME( UBFPCargoPlatformComponent, mStationMode );
-	DOREPLIFETIME( UBFPCargoPlatformComponent, mLoadRate );
-	DOREPLIFETIME( UBFPCargoPlatformComponent, mUnloadRate );
-	DOREPLIFETIME( UBFPCargoPlatformComponent, mLoadInventory );
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(UBFPCargoPlatformComponent, mStationMode);
+	DOREPLIFETIME(UBFPCargoPlatformComponent, mLoadRate);
+	DOREPLIFETIME(UBFPCargoPlatformComponent, mUnloadRate);
+	DOREPLIFETIME(UBFPCargoPlatformComponent, mLoadInventory);
 }
 
 bool UBFPCargoPlatformComponent::ShouldSave_Implementation() const
@@ -60,20 +60,20 @@ bool UBFPCargoPlatformComponent::NeedTransform_Implementation()
 	return false;
 }
 
-void UBFPCargoPlatformComponent::PublishTransferRates( float NewLoadRate, float NewUnloadRate )
+void UBFPCargoPlatformComponent::PublishTransferRates(float NewLoadRate, float NewUnloadRate)
 {
 	mLoadRate = NewLoadRate;
 	mUnloadRate = NewUnloadRate;
 	// Authority broadcasts locally (single-player / listen-server host); remote clients fire via OnRep.
-	OnTransferRateUpdated.Broadcast( mLoadRate, mUnloadRate );
+	OnTransferRateUpdated.Broadcast(mLoadRate, mUnloadRate);
 }
 
 void UBFPCargoPlatformComponent::OnRep_TransferRate()
 {
-	OnTransferRateUpdated.Broadcast( mLoadRate, mUnloadRate );
+	OnTransferRateUpdated.Broadcast(mLoadRate, mUnloadRate);
 }
 
-void UBFPCargoPlatformComponent::SetStationMode( EBFPStationMode Mode )
+void UBFPCargoPlatformComponent::SetStationMode(EBFPStationMode Mode)
 {
 	// Authority-side apply. In MP, clients route through UBFPInteractProxyComponent (a client cannot mutate
 	// a buildable directly), which calls this on the server; the result replicates back via mStationMode.
@@ -81,29 +81,35 @@ void UBFPCargoPlatformComponent::SetStationMode( EBFPStationMode Mode )
 	bInitialized = 1;
 
 	// Load is involved (Load or Both): make sure the load buffer exists right away for the UI.
-	if ( Mode == EBFPStationMode::Load || Mode == EBFPStationMode::Both )
+	if (Mode == EBFPStationMode::Load || Mode == EBFPStationMode::Both)
 	{
 		EnsureLoadInventory();
 	}
 }
 
-void UBFPCargoPlatformComponent::SetLoadUnloadEnabled( bool bLoadEnabled, bool bUnloadEnabled )
+void UBFPCargoPlatformComponent::SetLoadUnloadEnabled(bool bLoadEnabled, bool bUnloadEnabled)
 {
 	EBFPStationMode Mode;
-	if ( bLoadEnabled && bUnloadEnabled ) { Mode = EBFPStationMode::Both; }
-	else if ( bLoadEnabled )              { Mode = EBFPStationMode::Load; }
-	else                                  { Mode = EBFPStationMode::Unload; } // (off,off) -> Unload
-	SetStationMode( Mode );
+	if (bLoadEnabled && bUnloadEnabled) {
+		Mode = EBFPStationMode::Both;
+	}
+	else if (bLoadEnabled) {
+		Mode = EBFPStationMode::Load;
+	}
+	else {
+		Mode = EBFPStationMode::Unload;
+	} // (off,off) -> Unload
+	SetStationMode(Mode);
 }
 
-void UBFPCargoPlatformComponent::SetBidirectionalEnabled( bool bEnabled )
+void UBFPCargoPlatformComponent::SetBidirectionalEnabled(bool bEnabled)
 {
-	SetStationMode( bEnabled ? EBFPStationMode::Both : EBFPStationMode::Unload );
+	SetStationMode(bEnabled ? EBFPStationMode::Both : EBFPStationMode::Unload);
 }
 
 UFGInventoryComponent* UBFPCargoPlatformComponent::GetLoadInventory() const
 {
-	if ( mLoadInventory )
+	if (mLoadInventory)
 	{
 		return mLoadInventory;
 	}
@@ -115,24 +121,24 @@ UFGInventoryComponent* UBFPCargoPlatformComponent::GetLoadInventory() const
 UFGInventoryComponent* UBFPCargoPlatformComponent::EnsureLoadInventory()
 {
 	AActor* Owner = GetOwner();
-	UFGInventoryComponent* V = FindInvByName( Owner, TEXT( "inventory" ) );
+	UFGInventoryComponent* V = FindInvByName(Owner, TEXT("inventory"));
 
-	UFGInventoryComponent* L = mLoadInventory ? mLoadInventory.Get() : FindInvByName( Owner, TEXT( "BFP_LoadInventory" ) );
+	UFGInventoryComponent* L = mLoadInventory ? mLoadInventory.Get() : FindInvByName(Owner, TEXT("BFP_LoadInventory"));
 
 	// Only the authority creates the component; clients pick up the replicated one by name.
-	if ( !L && Owner && Owner->HasAuthority() )
+	if (!L && Owner && Owner->HasAuthority())
 	{
-		L = NewObject<UBFPLoadInventoryComponent>( Owner, TEXT( "BFP_LoadInventory" ) );
-		if ( L )
+		L = NewObject<UBFPLoadInventoryComponent>(Owner, TEXT("BFP_LoadInventory"));
+		if (L)
 		{
 			L->RegisterComponent(); // replication flag is set in UBFPLoadInventoryComponent's constructor
-			if ( V )
+			if (V)
 			{
 				// Clone capacity / slot sizes / filters. CopyFromOtherComponent ALSO copies the items, so for
 				// a vanilla station that already held cargo this would DUPLICATE it. De-duplicate by keeping
 				// the items only on the inventory the mode actually uses, and emptying the other:
-				L->CopyFromOtherComponent( V );
-				if ( mStationMode == EBFPStationMode::Load )
+				L->CopyFromOtherComponent(V);
+				if (mStationMode == EBFPStationMode::Load)
 				{
 					// Loading reads from the load buffer -> the staged items belong there; clear the unload buffer.
 					V->Empty();
@@ -149,11 +155,11 @@ UFGInventoryComponent* UBFPCargoPlatformComponent::EnsureLoadInventory()
 	// Keep the load buffer exactly the same size as the vanilla (unload) inventory. This heals buffers
 	// created by older builds at a wrong/larger size and persisted in the save. Authority only; the
 	// Resize replicates to clients. (Resize keeps items in the surviving low-index slots.)
-	if ( L && V && Owner && Owner->HasAuthority() && L->GetSizeLinear() != V->GetSizeLinear() )
+	if (L && V && Owner && Owner->HasAuthority() && L->GetSizeLinear() != V->GetSizeLinear())
 	{
-		UE_LOG( LogTemp, Warning, TEXT( "[BFP] Resizing load buffer on %s from %d to %d to match the unload inventory" ),
-			*Owner->GetName(), L->GetSizeLinear(), V->GetSizeLinear() );
-		L->Resize( V->GetSizeLinear() );
+		UE_LOG(LogTemp, Warning, TEXT("[BFP] Resizing load buffer on %s from %d to %d to match the unload inventory"),
+			*Owner->GetName(), L->GetSizeLinear(), V->GetSizeLinear());
+		L->Resize(V->GetSizeLinear());
 	}
 
 	mLoadInventory = L;
@@ -173,8 +179,8 @@ void UBFPCargoPlatformComponent::OnRep_LoadInventory()
 void UBFPCargoPlatformComponent::ReconcileLoadBufferCapacity()
 {
 	UFGInventoryComponent* L = mLoadInventory.Get();
-	UFGInventoryComponent* V = FindInvByName( GetOwner(), TEXT( "inventory" ) );
-	if ( !L || !V )
+	UFGInventoryComponent* V = FindInvByName(GetOwner(), TEXT("inventory"));
+	if (!L || !V)
 	{
 		return;
 	}
@@ -183,12 +189,12 @@ void UBFPCargoPlatformComponent::ReconcileLoadBufferCapacity()
 	// "Can't find a slot size!" for every empty/no-arbitrary slot -> on solid platforms (no arbitrary sizes
 	// at all) that warning fires for every slot of both inventories and floods the server log at startup.
 	const TArray<int32>& Arb = V->GetmArbitrarySlotSizes();
-	const int32 Num = FMath::Min( L->GetSizeLinear(), Arb.Num() );
-	for ( int32 i = 0; i < Num; ++i )
+	const int32 Num = FMath::Min(L->GetSizeLinear(), Arb.Num());
+	for (int32 i = 0; i < Num; ++i)
 	{
-		if ( Arb[i] > 0 )
+		if (Arb[i] > 0)
 		{
-			L->AddArbitrarySlotSize( i, Arb[i] ); // copy the (un-cloned, un-replicated) arbitrary fluid capacity
+			L->AddArbitrarySlotSize(i, Arb[i]); // copy the (un-cloned, un-replicated) arbitrary fluid capacity
 		}
 	}
 }

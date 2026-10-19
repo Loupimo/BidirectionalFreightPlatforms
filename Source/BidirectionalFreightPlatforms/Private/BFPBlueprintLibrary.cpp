@@ -18,7 +18,7 @@
 TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::StationInteractWidgetClass = nullptr;
 TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::FluidStationInteractWidgetClass = nullptr;
 
-void UBFPBlueprintLibrary::SetStationInteractWidgetClass( TSoftClassPtr<UFGInteractWidget> WidgetClass )
+void UBFPBlueprintLibrary::SetStationInteractWidgetClass(TSoftClassPtr<UFGInteractWidget> WidgetClass)
 {
 	StationInteractWidgetClass = WidgetClass;
 }
@@ -28,7 +28,7 @@ TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::GetStationInteractWidgetC
 	return StationInteractWidgetClass;
 }
 
-void UBFPBlueprintLibrary::SetFluidStationInteractWidgetClass( TSoftClassPtr<UFGInteractWidget> WidgetClass )
+void UBFPBlueprintLibrary::SetFluidStationInteractWidgetClass(TSoftClassPtr<UFGInteractWidget> WidgetClass)
 {
 	FluidStationInteractWidgetClass = WidgetClass;
 }
@@ -38,31 +38,31 @@ TSoftClassPtr<UFGInteractWidget> UBFPBlueprintLibrary::GetFluidStationInteractWi
 	return FluidStationInteractWidgetClass;
 }
 
-UFGInventoryComponent* UBFPBlueprintLibrary::GetUnloadInventory( AFGBuildableTrainPlatformCargo* Platform )
+UFGInventoryComponent* UBFPBlueprintLibrary::GetUnloadInventory(AFGBuildableTrainPlatformCargo* Platform)
 {
 	// The vanilla inventory is our unload buffer; it always rests here between ticks.
 	UFGInventoryComponent* Inv = Platform ? Platform->GetInventory() : nullptr;
-	if ( Platform )
+	if (Platform)
 	{
 		// DIAGNOSTIC (MP): is the vanilla inventory replicated to the client, and does its content reach us?
-		UE_LOG( LogBFP, Verbose, TEXT( "[BFP] GetUnloadInventory on %s: hasAuthority=%d unloadBuf=%s items=%d size=%d" ),
+		UE_LOG(LogBFP, Verbose, TEXT("[BFP] GetUnloadInventory on %s: hasAuthority=%d unloadBuf=%s items=%d size=%d"),
 			*Platform->GetName(), Platform->HasAuthority() ? 1 : 0,
-			Inv ? TEXT( "FOUND" ) : TEXT( "NULL" ),
-			Inv ? Inv->GetNumItems( nullptr ) : -1, Inv ? Inv->GetSizeLinear() : -1 );
+			Inv ? TEXT("FOUND") : TEXT("NULL"),
+			Inv ? Inv->GetNumItems(nullptr) : -1, Inv ? Inv->GetSizeLinear() : -1);
 	}
 	return Inv;
 }
 
-UFGInventoryComponent* UBFPBlueprintLibrary::GetLoadInventory( AFGBuildableTrainPlatformCargo* Platform )
+UFGInventoryComponent* UBFPBlueprintLibrary::GetLoadInventory(AFGBuildableTrainPlatformCargo* Platform)
 {
-	if ( !Platform )
+	if (!Platform)
 	{
 		return nullptr;
 	}
 
 	UBFPCargoPlatformComponent* Comp = Platform->FindComponentByClass<UBFPCargoPlatformComponent>();
 	UFGInventoryComponent* Inv = Comp ? Comp->GetLoadInventory() : nullptr;
-	if ( !Inv && Comp )
+	if (!Inv && Comp)
 	{
 		// Server / single-player: lazily create so the UI always has something to show.
 		// No-op (returns null) on clients, which receive it via replication instead.
@@ -71,17 +71,17 @@ UFGInventoryComponent* UBFPBlueprintLibrary::GetLoadInventory( AFGBuildableTrain
 
 	// DIAGNOSTIC (MP): when null, pinpoint whether the toggle COMPONENT failed to replicate to the client
 	// (toggleComp=NULL) or only the load buffer did (toggleComp=FOUND). hasAuthority=0 means we are a client.
-	UE_LOG( LogBFP, Verbose, TEXT( "[BFP] GetLoadInventory on %s: hasAuthority=%d toggleComp=%s loadBuf=%s" ),
+	UE_LOG(LogBFP, Verbose, TEXT("[BFP] GetLoadInventory on %s: hasAuthority=%d toggleComp=%s loadBuf=%s"),
 		*Platform->GetName(), Platform->HasAuthority() ? 1 : 0,
-		Comp ? TEXT( "FOUND" ) : TEXT( "NULL" ), Inv ? TEXT( "FOUND" ) : TEXT( "NULL" ) );
+		Comp ? TEXT("FOUND") : TEXT("NULL"), Inv ? TEXT("FOUND") : TEXT("NULL"));
 	return Inv;
 }
 
-float UBFPBlueprintLibrary::GetLoadItemTransferRate( AFGBuildableTrainPlatformCargo* Platform )
+float UBFPBlueprintLibrary::GetLoadItemTransferRate(AFGBuildableTrainPlatformCargo* Platform)
 {
 	// Our hooks compute this from the docked wagon's freight delta (the game's own smoothed rate is
 	// unusable in our two-pass architecture). 0 between stops; reset on undock.
-	if ( !Platform )
+	if (!Platform)
 	{
 		return 0.f;
 	}
@@ -89,9 +89,9 @@ float UBFPBlueprintLibrary::GetLoadItemTransferRate( AFGBuildableTrainPlatformCa
 	return Comp ? Comp->GetLoadRate() : 0.f;
 }
 
-float UBFPBlueprintLibrary::GetUnloadItemTransferRate( AFGBuildableTrainPlatformCargo* Platform )
+float UBFPBlueprintLibrary::GetUnloadItemTransferRate(AFGBuildableTrainPlatformCargo* Platform)
 {
-	if ( !Platform )
+	if (!Platform)
 	{
 		return 0.f;
 	}
@@ -99,16 +99,16 @@ float UBFPBlueprintLibrary::GetUnloadItemTransferRate( AFGBuildableTrainPlatform
 	return Comp ? Comp->GetUnloadRate() : 0.f;
 }
 
-void UBFPBlueprintLibrary::CloseStationUI( UFGInteractWidget* Widget )
+void UBFPBlueprintLibrary::CloseStationUI(UFGInteractWidget* Widget)
 {
-	if ( !Widget )
+	if (!Widget)
 	{
 		return;
 	}
 
 	APlayerController* PC = Widget->GetOwningPlayer();
-	AFGHUD* HUD = PC ? Cast<AFGHUD>( PC->GetHUD() ) : nullptr;
-	if ( UFGGameUI* GameUI = HUD ? HUD->GetGameUI() : nullptr )
+	AFGHUD* HUD = PC ? Cast<AFGHUD>(PC->GetHUD()) : nullptr;
+	if (UFGGameUI* GameUI = HUD ? HUD->GetGameUI() : nullptr)
 	{
 		// Exactly what the Escape key triggers: pops the top interact widget and restores input/camera.
 		GameUI->Native_HandlePauseGamePressed();
@@ -121,38 +121,38 @@ namespace
 	constexpr float BFP_FluidUnitsPerM3 = 1000.f;
 }
 
-float UBFPBlueprintLibrary::GetFluidAmountM3( UFGInventoryComponent* Inventory )
+float UBFPBlueprintLibrary::GetFluidAmountM3(UFGInventoryComponent* Inventory)
 {
-	return Inventory ? Inventory->GetNumItems( nullptr ) / BFP_FluidUnitsPerM3 : 0.f;
+	return Inventory ? Inventory->GetNumItems(nullptr) / BFP_FluidUnitsPerM3 : 0.f;
 }
 
-float UBFPBlueprintLibrary::GetFluidCapacityM3( UFGInventoryComponent* Inventory )
+float UBFPBlueprintLibrary::GetFluidCapacityM3(UFGInventoryComponent* Inventory)
 {
-	if ( !Inventory || Inventory->GetSizeLinear() <= 0 )
+	if (!Inventory || Inventory->GetSizeLinear() <= 0)
 	{
 		return 0.f;
 	}
-	return Inventory->GetSlotSize( 0, nullptr ) / BFP_FluidUnitsPerM3;
+	return Inventory->GetSlotSize(0, nullptr) / BFP_FluidUnitsPerM3;
 }
 
-TSubclassOf<UFGItemDescriptor> UBFPBlueprintLibrary::GetFluidClass( UFGInventoryComponent* Inventory )
+TSubclassOf<UFGItemDescriptor> UBFPBlueprintLibrary::GetFluidClass(UFGInventoryComponent* Inventory)
 {
-	if ( !Inventory || Inventory->GetSizeLinear() <= 0 )
+	if (!Inventory || Inventory->GetSizeLinear() <= 0)
 	{
 		return nullptr;
 	}
-	TSubclassOf<UFGItemDescriptor> Cls = Inventory->GetItemClassAtIndex( 0 );
-	if ( !Cls )
+	TSubclassOf<UFGItemDescriptor> Cls = Inventory->GetItemClassAtIndex(0);
+	if (!Cls)
 	{
 		// Empty slot: fall back to the configured allowed fluid type, if any.
-		Cls = Inventory->GetAllowedItemOnIndex( 0 );
+		Cls = Inventory->GetAllowedItemOnIndex(0);
 	}
 	return Cls;
 }
 
-float UBFPBlueprintLibrary::GetMaxPipeFlowRate( AFGBuildableTrainPlatformCargo* Platform )
+float UBFPBlueprintLibrary::GetMaxPipeFlowRate(AFGBuildableTrainPlatformCargo* Platform)
 {
-	if ( !Platform )
+	if (!Platform)
 	{
 		return 0.f;
 	}
@@ -160,30 +160,30 @@ float UBFPBlueprintLibrary::GetMaxPipeFlowRate( AFGBuildableTrainPlatformCargo* 
 	// Walk the platform's pipe connections to the pipelines actually attached, and take the best limit.
 	float MaxLimit = 0.f;
 	TInlineComponentArray<UFGPipeConnectionComponent*> PipeConns;
-	Platform->GetComponents( PipeConns );
-	for ( UFGPipeConnectionComponent* Conn : PipeConns )
+	Platform->GetComponents(PipeConns);
+	for (UFGPipeConnectionComponent* Conn : PipeConns)
 	{
-		if ( !Conn || !Conn->IsConnected() )
+		if (!Conn || !Conn->IsConnected())
 		{
 			continue;
 		}
 		const UFGPipeConnectionComponentBase* Other = Conn->GetConnection();
-		if ( const AFGBuildablePipeline* Pipe = Other ? Cast<AFGBuildablePipeline>( Other->GetOwner() ) : nullptr )
+		if (const AFGBuildablePipeline* Pipe = Other ? Cast<AFGBuildablePipeline>(Other->GetOwner()) : nullptr)
 		{
-			MaxLimit = FMath::Max( MaxLimit, Pipe->GetFlowLimit() );
+			MaxLimit = FMath::Max(MaxLimit, Pipe->GetFlowLimit());
 		}
 	}
 	return MaxLimit;
 }
 
-void UBFPBlueprintLibrary::FlushStationPipes( AFGBuildableTrainPlatformCargo* Platform, bool bInput )
+void UBFPBlueprintLibrary::FlushStationPipes(AFGBuildableTrainPlatformCargo* Platform, bool bInput)
 {
-	if ( !Platform )
+	if (!Platform)
 	{
 		return;
 	}
-	AFGPipeSubsystem* Subsystem = AFGPipeSubsystem::GetPipeSubsystem( Platform );
-	if ( !Subsystem )
+	AFGPipeSubsystem* Subsystem = AFGPipeSubsystem::GetPipeSubsystem(Platform);
+	if (!Subsystem)
 	{
 		return;
 	}
@@ -192,22 +192,22 @@ void UBFPBlueprintLibrary::FlushStationPipes( AFGBuildableTrainPlatformCargo* Pl
 	const TArray<TObjectPtr<UFGPipeConnectionComponent>> Connections = bInput
 		? Platform->GetmPipeInputConnections()
 		: Platform->GetmPipeOutputConnections();
-	for ( UFGPipeConnectionComponent* Conn : Connections )
+	for (UFGPipeConnectionComponent* Conn : Connections)
 	{
-		if ( !Conn || !Conn->IsConnected() )
+		if (!Conn || !Conn->IsConnected())
 		{
 			continue;
 		}
 		const UFGPipeConnectionComponentBase* Other = Conn->GetConnection();
-		if ( AActor* Integrant = Other ? Other->GetOwner() : nullptr )
+		if (AActor* Integrant = Other ? Other->GetOwner() : nullptr)
 		{
 			// Flushes the whole network the connected integrant belongs to (clears fluid + empties contents).
-			Subsystem->FlushPipeNetworkFromIntegrant( Integrant );
+			Subsystem->FlushPipeNetworkFromIntegrant(Integrant);
 		}
 	}
 }
 
-UBFPInteractProxyComponent* UBFPBlueprintLibrary::GetInteractProxy( APawn* PlayerPawn )
+UBFPInteractProxyComponent* UBFPBlueprintLibrary::GetInteractProxy(APawn* PlayerPawn)
 {
 	return PlayerPawn ? PlayerPawn->FindComponentByClass<UBFPInteractProxyComponent>() : nullptr;
 }
