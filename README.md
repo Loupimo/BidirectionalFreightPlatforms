@@ -32,9 +32,9 @@ This allows three possible configurations:
 
 ### User Interface
 
-![Freight UI](https://github.com/Loupimo/BidirectionalFreightPlatforms/blob/main/Resources/Freight_UI.png?raw=true)
+![Freight UI](https://github.com/Loupimo/BidirectionalFreightPlatforms/blob/main/Mod_Presentation/Freight_UI.png?raw=true)
 
-![Fluid UI](https://github.com/Loupimo/BidirectionalFreightPlatforms/blob/main/Resources/Fluid_UI.png?raw=true)
+![Fluid UI](https://github.com/Loupimo/BidirectionalFreightPlatforms/blob/main/Mod_Presentation/Fluid_UI.png?raw=true)
 
 ---
 
@@ -76,7 +76,7 @@ unless train filters prevent one of these actions.
 
 For this reason, it is recommended to review your train schedules and platform filters when introducing bidirectional platforms into an existing logistics network.
 
-![Freight UI](https://github.com/Loupimo/BidirectionalFreightPlatforms/blob/main/Resources/Train_Demo.gif?raw=true)
+![Freight UI](https://github.com/Loupimo/BidirectionalFreightPlatforms/blob/main/Mod_Presentation/Train_Demo.gif?raw=true)
 
 # Q/A
 
